@@ -1,0 +1,2324 @@
+#include <stdint.h>
+#include "tty.h"
+#include "gdt.h"
+#include "idt.h"
+#include "irq.h"
+#include "pit.h"
+#include "pic.h"
+#include "keyboard.h"
+#include "io.h"
+#include "multiboot.h"
+#include "pmm.h"
+#include "paging.h"
+#include "heap.h"
+#include "framebuffer.h"
+#include "serial.h"
+#include "thread.h"
+#include "syscall.h"
+#include "elf.h"
+#include "ata.h"
+#include "fat16.h"
+#include "fd.h"
+#include "mouse.h"
+#include "usb.h"
+#include "net.h"
+#include "wm.h"
+#include "files.h"
+#include "settings.h"
+#include "rtc.h"
+#include "launchpad.h"
+#include "anim.h"
+#include "terminal.h"
+#include "menu.h"
+#include "snake.h"
+#include "gdt.h"
+
+/* Multiboot modules */
+#define MAX_MODULES 4
+static uint32_t g_mod_start[MAX_MODULES] = {0,0,0,0};
+static uint32_t g_mod_end  [MAX_MODULES] = {0,0,0,0};
+
+static uint32_t elf_run_start = 0;
+static uint32_t elf_run_end   = 0;
+
+volatile uint32_t ticks = 0;   /* глобальная — используется в settings.c */
+static void timer_cb(struct regs* r) {
+    (void)r;
+    ticks++;
+    thread_t* t = thread_get(thread_current_id());
+    if (t) t->ticks++;
+    thread_tick();
+
+    /* Snake tick */
+    extern void snake_tick(void);
+    snake_tick();
+
+    /* Анимация обоев */
+    extern int settings_wallpaper_is_animated(void);
+    extern void desktop_render(void);
+    static uint32_t anim_counter = 0;
+    if (settings_wallpaper_is_animated()) {
+        anim_counter++;
+        if (anim_counter % 5 == 0) {   /* ~20 FPS */
+            desktop_render();
+        }
+    }
+
+    schedule();
+}
+
+static int str_eq(const char* a, const char* b) {
+    while (*a && *a == *b) { a++; b++; }
+    return *a == *b;
+}
+static int str_starts(const char* s, const char* prefix) {
+    while (*prefix) if (*s++ != *prefix++) return 0;
+    return 1;
+}
+
+static void cmd_help(void) {
+    tty_puts("Commands:\n");
+    tty_puts("  help         - this help\n");
+    tty_puts("  clear        - clear screen\n");
+    tty_puts("  echo <text>  - print text\n");
+    tty_puts("  ticks        - PIT tick count\n");
+    tty_puts("  cpu          - CPU info\n");
+    tty_puts("  mem          - memory stats\n");
+    tty_puts("  paging       - paging info\n");
+    tty_puts("  heap         - heap stats\n");
+    tty_puts("  kmalloc <n>  - allocate N bytes\n");
+    tty_puts("  kfree <hex>  - free pointer\n");
+    tty_puts("  alloc        - allocate 1 page\n");
+    tty_puts("  free <hex>   - free page at address\n");
+    tty_puts("  testpf       - deliberately trigger page fault\n");
+    tty_puts("  reboot       - reboot machine\n");
+    tty_puts("  spawn        - create 2 test threads\n");
+    tty_puts("  ps           - list threads\n");
+    tty_puts("  yield        - yield current thread\n");
+    tty_puts("  counters     - show test thread counters\n");
+    tty_puts("  spawn_sleeper- spawn a thread that sleeps 1s per loop\n");
+    tty_puts("  sleeper      - show sleeper counter\n");
+    tty_puts("  usertest     - spawn a thread that enters ring3\n");
+    tty_puts("  run          - load hello.elf in ring3\n");
+    tty_puts("  ush          - load shell.elf (userspace shell)\n");
+    tty_puts("  halt         - halt CPU\n");
+}
+
+void cmd_reboot(void) {
+    tty_puts("Rebooting...\n");
+    uint8_t good = 0x02;
+    while (good & 0x02) good = inb(0x64);
+    outb(0x64, 0xFE);
+    for (;;) __asm__ volatile ("cli; hlt");
+}
+
+static void cmd_cpu(void) {
+    uint32_t eax, ebx, ecx, edx;
+    __asm__ volatile ("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(0));
+    char vendor[13];
+    *(uint32_t*)&vendor[0] = ebx;
+    *(uint32_t*)&vendor[4] = edx;
+    *(uint32_t*)&vendor[8] = ecx;
+    vendor[12] = 0;
+    tty_puts("CPU vendor: "); tty_puts(vendor); tty_putc('\n');
+    __asm__ volatile ("cpuid" : "=a"(eax) : "a"(0x80000000u));
+    if (eax < 0x80000004u) { tty_puts("CPU brand : (not supported)\n"); return; }
+    char brand[49];
+    for (int i = 0; i < 3; i++) {
+        __asm__ volatile ("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                          : "a"(0x80000002u + i));
+        *(uint32_t*)&brand[i*16 + 0]  = eax;
+        *(uint32_t*)&brand[i*16 + 4]  = ebx;
+        *(uint32_t*)&brand[i*16 + 8]  = ecx;
+        *(uint32_t*)&brand[i*16 + 12] = edx;
+    }
+    brand[48] = 0;
+    tty_puts("CPU brand : "); tty_puts(brand); tty_putc('\n');
+}
+
+static void cmd_mem(void) {
+    tty_puts("total pages = "); tty_put_hex(pmm_total_pages());
+    tty_puts("  (");            tty_put_hex(pmm_total_pages() * 4); tty_puts(" KB)\n");
+    tty_puts("used  pages = "); tty_put_hex(pmm_used_pages());
+    tty_puts("  (");            tty_put_hex(pmm_used_pages() * 4);  tty_puts(" KB)\n");
+    tty_puts("free  pages = "); tty_put_hex(pmm_free_pages());
+    tty_puts("  (");            tty_put_hex(pmm_free_pages() * 4);  tty_puts(" KB)\n");
+}
+
+static void cmd_paging(void) {
+    uint32_t cr0, cr3, cr4;
+    __asm__ volatile ("mov %%cr0, %0" : "=r"(cr0));
+    __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
+    __asm__ volatile ("mov %%cr4, %0" : "=r"(cr4));
+    tty_puts("CR0 = "); tty_put_hex(cr0);
+    tty_puts("  PG=");  tty_putc((cr0 >> 31) & 1 ? '1' : '0'); tty_putc('\n');
+    tty_puts("CR3 = "); tty_put_hex(cr3); tty_putc('\n');
+    tty_puts("CR4 = "); tty_put_hex(cr4);
+    tty_puts("  PSE="); tty_putc((cr4 >> 4) & 1 ? '1' : '0'); tty_putc('\n');
+    tty_puts("Page directory phys = "); tty_put_hex(paging_pd_phys()); tty_putc('\n');
+}
+
+/* ---- test threads ---- */
+static volatile uint32_t counter_a = 0;
+static volatile uint32_t counter_b = 0;
+
+static void task_a(void) {
+    for (;;) {
+        counter_a++;
+        for (volatile int i = 0; i < 200000; i++);
+    }
+}
+static void task_b(void) {
+    for (;;) {
+        counter_b++;
+        for (volatile int i = 0; i < 200000; i++);
+    }
+}
+
+static volatile uint32_t counter_sleep = 0;
+static void task_sleeper(void) {
+    for (;;) {
+        counter_sleep++;
+        thread_sleep(100);   /* 1 секунда при 100 Гц */
+    }
+}
+
+/* ---- userspace demo ---- */
+#define UADDR        0x02000000u
+#define USTACK_TOP   (UADDR + 0x10000u)
+
+#define PROG_UADDR   0x03000000u
+#define PROG_USTACK  (PROG_UADDR + 0x10000u)
+
+/* Ожидающая точка входа для запускаемой user-программы */
+static uint32_t g_prog_entry = 0;
+
+static uint8_t syscall_stack[4096] __attribute__((aligned(16)));
+
+static const uint8_t user_prog[] = {
+    0xB8, 0x02, 0x00, 0x00, 0x00,   /* mov eax, 2 (write)      */
+    0xBB, 0x1F, 0x00, 0x00, 0x02,   /* mov ebx, 0x0200001F     */
+    0xB9, 0x0D, 0x00, 0x00, 0x00,   /* mov ecx, 13             */
+    0xCD, 0x80,                      /* int 0x80                */
+    0xB8, 0x01, 0x00, 0x00, 0x00,   /* mov eax, 1 (exit)       */
+    0xBB, 0x2A, 0x00, 0x00, 0x00,   /* mov ebx, 42             */
+    0xCD, 0x80,                      /* int 0x80                */
+    0xEB, 0xFE,                      /* jmp $                   */
+    0x48, 0x65, 0x6C, 0x6C, 0x6F,    /* "Hello "                */
+    0x20, 0x72, 0x69, 0x6E, 0x67,    /* " ring"                 */
+    0x33, 0x21, 0x0A,                /* "3!\n"                  */
+};
+
+extern void enter_user(uint32_t entry, uint32_t user_stack);
+
+static void user_task(void) {
+    for (uint32_t i = 0; i < sizeof(user_prog); i++)
+        ((uint8_t*)UADDR)[i] = user_prog[i];
+
+    uint32_t kstack_top = (uint32_t)syscall_stack + sizeof(syscall_stack);
+    gdt_set_kernel_stack(kstack_top);
+
+    tty_set_color(0x0E);
+    tty_puts("[kernel] entering ring3 @ ");
+    tty_put_hex(UADDR);
+    tty_puts(", stack ");
+    tty_put_hex(USTACK_TOP);
+    tty_putc('\n');
+    tty_set_color(0x0A);
+
+    enter_user(UADDR, USTACK_TOP);
+
+    tty_puts("[kernel] should not return!\n");
+    for (;;) __asm__ volatile ("cli; hlt");
+}
+
+/* ---- ELF userspace ---- */
+static uint32_t elf_entry = 0;
+
+static void elf_task(void) {
+    uint32_t size = elf_run_end - elf_run_start;
+    tty_puts("[kernel] loading ELF module, size = ");
+    tty_put_hex(size); tty_putc('\n');
+
+    elf_entry = elf_load((const void*)elf_run_start, size);
+    if (!elf_entry) {
+        tty_puts("[kernel] elf load failed\n");
+        thread_exit();
+    }
+
+    tty_puts("[kernel] elf entry = "); tty_put_hex(elf_entry); tty_putc('\n');
+
+    uint32_t kstack_top = (uint32_t)syscall_stack + sizeof(syscall_stack);
+    gdt_set_kernel_stack(kstack_top);
+
+    tty_set_color(0x0E);
+    tty_puts("[kernel] entering user ELF in ring3...\n");
+    tty_set_color(0x0A);
+
+    extern void enter_user(uint32_t entry, uint32_t user_stack);
+    enter_user(elf_entry, USTACK_TOP);
+
+    tty_puts("[kernel] should not return!\n");
+    for (;;) __asm__ volatile ("cli; hlt");
+}
+
+static void cmd_disk(void) {
+    static uint8_t buf[512];
+    if (ata_read_sector(0, buf) != 0) {
+        tty_puts("disk read failed\n");
+        return;
+    }
+    for (int row = 0; row < 16; row++) {
+        tty_put_hex(row * 32);
+        tty_puts(": ");
+        for (int col = 0; col < 32; col++) {
+            uint8_t b = buf[row*32 + col];
+            uint8_t hi = (b >> 4) & 0xF;
+            uint8_t lo = b & 0xF;
+            tty_putc(hi < 10 ? '0'+hi : 'a'+hi-10);
+            tty_putc(lo < 10 ? '0'+lo : 'a'+lo-10);
+            if ((col & 1) == 1) tty_putc(' ');
+        }
+        tty_putc('\n');
+    }
+}
+
+static int ls_cb(const struct fat16_dirent* de, void* user) {
+    (void)user;
+    char name[16];
+    fat16_name(de, name);
+    tty_puts(name);
+    if (de->attr & FAT16_ATTR_DIR) tty_puts("/");
+    tty_puts("    ");
+    tty_put_hex(de->size);
+    tty_puts(" bytes");
+    if (de->attr & FAT16_ATTR_DIR) tty_puts("  (dir)");
+    tty_putc('\n');
+    return 0;
+}
+
+static void cmd_ls(void) {
+    tty_puts("-- FAT16 root --\n");
+    fat16_ls(ls_cb, 0);
+    tty_puts("-- end --\n");
+}
+
+static void cmd_cat(const char* name) {
+    struct fat16_dirent de;
+    if (fat16_find(name, &de) != 0) {
+        tty_puts("not found: "); tty_puts(name); tty_putc('\n');
+        return;
+    }
+    if (de.attr & FAT16_ATTR_DIR) {
+        tty_puts("it's a directory\n");
+        return;
+    }
+    static uint8_t buf[65536];
+    uint32_t n = fat16_read(&de, buf, sizeof(buf));
+    tty_puts("--- "); tty_puts(name); tty_puts(" (");
+    tty_put_hex(n); tty_puts(" bytes) ---\n");
+    for (uint32_t i = 0; i < n; i++) tty_putc((char)buf[i]);
+    if (n == 0 || buf[n-1] != '\n') tty_putc('\n');
+    tty_puts("--- end ---\n");
+}
+
+/* Запускает ELF-программу с диска как новый поток.
+   Программа грузится по PROG_UADDR, пользовательский стек = PROG_USTACK. */
+static void prog_task(void) {
+    uint32_t entry = g_prog_entry;
+    g_prog_entry = 0;
+
+    tty_set_color(0x0E);
+    tty_puts("[kernel] starting user program @ ");
+    tty_put_hex(entry); tty_putc('\n');
+    tty_set_color(0x0A);
+
+    extern void enter_user(uint32_t entry, uint32_t user_stack);
+    enter_user(entry, PROG_USTACK);
+
+    for (;;) __asm__ volatile ("cli; hlt");
+}
+
+int spawn_user_elf(const char* path) {
+    /* Открываем файл через FAT16 */
+    int fd = fd_open(path);
+    if (fd < 0) return -1;
+
+    /* Читаем весь файл в буфер из heap */
+    uint8_t* buf = (uint8_t*)kmalloc(65536);
+    if (!buf) { fd_close(fd); return -1; }
+
+    uint32_t n = fd_read(fd, buf, 65536);
+    fd_close(fd);
+
+    if (n == 0) { kfree(buf); return -1; }
+
+    uint32_t entry = elf_load(buf, n);
+    kfree(buf);
+
+    if (entry < PROG_UADDR || entry >= PROG_UADDR + 0x100000) {
+        tty_set_color(0x0C);
+        tty_puts("[kernel] ELF entry outside prog region: ");
+        tty_put_hex(entry); tty_putc('\n');
+        tty_set_color(0x0A);
+        return -1;
+    }
+
+    g_prog_entry = entry;
+    return thread_create(prog_task, "prog");
+}
+
+/* ---- graphics commands ---- */
+static int gx_parse_int(const char** p) {
+    while (**p == ' ') (*p)++;
+    int neg = 0, v = 0;
+    if (**p == '-') { neg = 1; (*p)++; }
+    while (**p >= '0' && **p <= '9') { v = v*10 + (**p - '0'); (*p)++; }
+    return neg ? -v : v;
+}
+static uint32_t gx_parse_hex(const char** p) {
+    while (**p == ' ') (*p)++;
+    if (**p=='0' && ((*p)[1]=='x' || (*p)[1]=='X')) *p += 2;
+    uint32_t v = 0;
+    while (1) {
+        char c = **p; uint32_t d;
+        if      (c>='0'&&c<='9') d = c-'0';
+        else if (c>='a'&&c<='f') d = c-'a'+10;
+        else if (c>='A'&&c<='F') d = c-'A'+10;
+        else break;
+        v = (v<<4) | d;
+        (*p)++;
+    }
+    return v;
+}
+
+static void cmd_gfx_clear(const char* args) {
+    const char* p = args;
+    uint32_t c = gx_parse_hex(&p);
+    gfx_clear(c);
+    gfx_flush();
+}
+
+static void cmd_gfx_box(const char* args) {
+    const char* p = args;
+    int x = gx_parse_int(&p), y = gx_parse_int(&p);
+    int w = gx_parse_int(&p), h = gx_parse_int(&p);
+    uint32_t c = gx_parse_hex(&p);
+    gfx_box(x, y, w, h, c);
+    gfx_flush();
+}
+
+static void cmd_gfx_circle(const char* args) {
+    const char* p = args;
+    int x = gx_parse_int(&p), y = gx_parse_int(&p), r = gx_parse_int(&p);
+    uint32_t c = gx_parse_hex(&p);
+    gfx_circle(x, y, r, c);
+    gfx_flush();
+}
+
+static void cmd_gfx_line(const char* args) {
+    const char* p = args;
+    int x0 = gx_parse_int(&p), y0 = gx_parse_int(&p);
+    int x1 = gx_parse_int(&p), y1 = gx_parse_int(&p);
+    uint32_t c = gx_parse_hex(&p);
+    gfx_line(x0, y0, x1, y1, c);
+    gfx_flush();
+}
+
+static void cmd_gfx_gradient(void) {
+    gfx_gradient_v(0x00102040, 0x00F0A020);
+    gfx_flush();
+}
+
+static void cmd_gfx_demo(void) {
+    gfx_gradient_v(0x00102040, 0x00406080);
+
+    /* круги */
+    gfx_circle(512, 384, 300, 0xFFFFFF);
+    gfx_circle(512, 384, 250, 0xFFFF00);
+    gfx_circle(512, 384, 200, 0xFF8080);
+    gfx_circle(512, 384, 150, 0xFF00FF);
+
+    /* крест из линий */
+    for (int i = 0; i < 20; i++) {
+        int off = i * 15;
+        uint32_t c = 0x3050FF + i * 0x080808;
+        gfx_line(0, off, 1023, 767 - off, c);
+        gfx_line(1023, off, 0, 767 - off, c);
+    }
+
+    /* рамка */
+    gfx_box(20, 20, 984, 728, 0xFFFFFF);
+    gfx_box(24, 24, 976, 720, 0x888888);
+
+    /* подписи */
+    gfx_puts(40, 40, "EndixOS Graphics Demo", 0xFFFFFF, 2);
+    gfx_puts(40, 76, "line / circle / box / gradient", 0xC0C0C0, 2);
+
+    gfx_flush();
+}
+
+/* ---- mouse cursor + paint mode ---- */
+#define CURSOR_SAVE_W 8
+#define CURSOR_SAVE_H 8
+int g_mouse_on = 0;
+static int  g_cursor_prev_x  = -1;
+static int  g_cursor_prev_y  = -1;
+static uint32_t g_saved[CURSOR_SAVE_W * CURSOR_SAVE_H];
+static uint32_t g_paint_color = 0x00FF00;
+
+/* Отрисовать курсор в back buffer и flush */
+static void draw_cursor_at(int x, int y) {
+    /* Сохранить область */
+    extern uint32_t fb_getpixel(int, int);
+    for (int i = 0; i < CURSOR_SAVE_H; i++)
+        for (int j = 0; j < CURSOR_SAVE_W; j++)
+            g_saved[i * CURSOR_SAVE_W + j] = fb_getpixel(x + j, y + i);
+
+    /* Стрелка 8x8 (1 = рисуем) */
+    static const uint8_t arrow[8] = {
+        0x80, 0xC0, 0xE0, 0xF0, 0xF8, 0xF0, 0xC0, 0x80
+    };
+    for (int i = 0; i < 8; i++) {
+        uint8_t row = arrow[i];
+        for (int j = 0; j < 8; j++) {
+            if (row & (1 << (7 - j)))
+                fb_putpixel(x + j, y + i, 0xFF0000);
+            else
+                fb_putpixel(x + j, y + i, 0x000000);
+        }
+    }
+}
+
+static void restore_cursor(int x, int y) {
+    for (int i = 0; i < CURSOR_SAVE_H; i++)
+        for (int j = 0; j < CURSOR_SAVE_W; j++)
+            fb_putpixel(x + j, y + i, g_saved[i * CURSOR_SAVE_W + j]);
+}
+
+/* Вызывается из timer_cb */
+void mouse_tick(void) {
+    if (!g_mouse_on) return;
+
+    extern void mouse_poll(void);
+    mouse_poll();
+
+    int cx = mouse_x();
+    int cy = mouse_y();
+
+    /* Стереть предыдущий курсор */
+    if (g_cursor_prev_x >= 0)
+        restore_cursor(g_cursor_prev_x, g_cursor_prev_y);
+
+    /* ЛКМ — поставить точку */
+    if (mouse_btn_left()) {
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++)
+                fb_putpixel(cx + j, cy + i, g_paint_color);
+    }
+    /* ПКМ — стереть область */
+    if (mouse_btn_right()) {
+        for (int i = 0; i < 10; i++)
+            for (int j = 0; j < 10; j++)
+                fb_putpixel(cx + j, cy + i, 0x000000);
+    }
+
+    draw_cursor_at(cx, cy);
+    g_cursor_prev_x = cx;
+    g_cursor_prev_y = cy;
+    gfx_flush();
+}
+
+
+static void cmd_mouse(void) {
+    extern void mouse_init(void);
+    mouse_init();
+    g_mouse_on = 1;
+    g_cursor_prev_x = -1;
+    g_cursor_prev_y = -1;
+    tty_puts("Mouse on. Ctrl+Alt+G to release.\n");
+    tty_puts("Type 'mdbg' before moving to enable serial logging.\n");
+}
+
+/* ---- WM demo windows ---- */
+
+
+
+/* ---- Virtual cursor (keyboard-driven) ---- */
+static int virt_cursor_x = 512;
+static int virt_cursor_y = 384;
+static uint8_t virt_prev_save[16*16*4];
+
+/* Курсор: 20×20 область. Сохраняем / рисуем / восстанавливаем ровно её. */
+#define CURSOR_W 20
+#define CURSOR_H 20
+
+/* ============ КУРСОР — ПРОСТОЙ И НАДЁЖНЫЙ ============ */
+
+#define CUR_W 14
+#define CUR_H 22
+
+static int      virt_prev_x = -1;
+static int      virt_prev_y = -1;
+static uint32_t cursor_save[14 * 22];
+
+static const uint16_t cursor_arrow[18] = {
+    0xC000, 0xE000, 0xF000, 0xF800, 0xFC00, 0xFE00,
+    0xFF00, 0xFF80, 0xFFC0, 0xFF80, 0xFC00, 0xF800,
+    0xF000, 0xF800, 0xC800, 0x0C00, 0x0400, 0x0000
+};
+
+static void virt_cursor_draw(void) {
+    if (virt_cursor_x < 0) virt_cursor_x = 0;
+    if (virt_cursor_y < 0) virt_cursor_y = 0;
+    if (virt_cursor_x + 14 > (int)fb_width())  virt_cursor_x = (int)fb_width()  - 14;
+    if (virt_cursor_y + 22 > (int)fb_height()) virt_cursor_y = (int)fb_height() - 22;
+
+    /* Сохранить 14×22 */
+    for (int i = 0; i < 22; i++)
+        for (int j = 0; j < 14; j++)
+            cursor_save[i * 14 + j] = fb_getpixel(virt_cursor_x + j, virt_cursor_y + i);
+
+    virt_prev_x = virt_cursor_x;
+    virt_prev_y = virt_cursor_y;
+
+    int base_x = virt_cursor_x + 2;
+    int base_y = virt_cursor_y + 2;
+
+    /* Чёрная обводка */
+    for (int row = 0; row < 18; row++) {
+        uint16_t bits = cursor_arrow[row];
+        for (int col = 0; col < 10; col++) {
+            if (!(bits & (0x8000 >> col))) continue;
+            int px = base_x + col;
+            int py = base_y + row;
+            fb_putpixel(px + 1, py, 0x000000);
+            fb_putpixel(px - 1, py, 0x000000);
+            fb_putpixel(px, py + 1, 0x000000);
+            fb_putpixel(px, py - 1, 0x000000);
+        }
+    }
+    /* Белая заливка */
+    for (int row = 0; row < 18; row++) {
+        uint16_t bits = cursor_arrow[row];
+        for (int col = 0; col < 10; col++) {
+            if (bits & (0x8000 >> col)) {
+                fb_putpixel(base_x + col, base_y + row, 0xFFFFFF);
+            }
+        }
+    }
+}
+
+static void virt_cursor_erase(void) {
+    if (virt_prev_x < 0 || virt_prev_y < 0) return;
+    for (int i = 0; i < 22; i++)
+        for (int j = 0; j < 14; j++)
+            fb_putpixel(virt_prev_x + j, virt_prev_y + i,
+                        cursor_save[i * 14 + j]);
+    virt_prev_x = -1;
+    virt_prev_y = -1;
+}
+
+static void virt_cursor_move(int dx, int dy) {
+    virt_cursor_erase();
+    virt_cursor_x += dx * 8;
+    virt_cursor_y += dy * 8;
+    if (virt_cursor_x < 0) virt_cursor_x = 0;
+    if (virt_cursor_y < 26) virt_cursor_y = 26;
+    if (virt_cursor_x >= (int)fb_width() - 20)  virt_cursor_x = (int)fb_width() - 21;
+    if (virt_cursor_y >= (int)fb_height() - 20) virt_cursor_y = (int)fb_height() - 21;
+    virt_cursor_draw();
+}
+
+
+
+
+
+
+
+
+
+static void cmd_ux(void) {
+    extern int usb_tablet_ready(void);
+    extern int usb_tablet_x(void);
+    extern int usb_tablet_y(void);
+    extern int usb_tablet_left(void);
+    extern int usb_tablet_right(void);
+
+    tty_puts("USB tablet status:\n");
+    tty_puts("  ready: ");  tty_put_hex(usb_tablet_ready());  tty_putc('\n');
+    tty_puts("  x:     ");  tty_put_hex(usb_tablet_x());      tty_putc('\n');
+    tty_puts("  y:     ");  tty_put_hex(usb_tablet_y());      tty_putc('\n');
+    tty_puts("  LMB:   ");  tty_put_hex(usb_tablet_left());   tty_putc('\n');
+    tty_puts("  RMB:   ");  tty_put_hex(usb_tablet_right());  tty_putc('\n');
+    tty_puts("\nMove mouse, retype 'ux' to update.\n");
+}
+
+/* ===================== DESKTOP — Material You ===================== */
+
+/* Палитра Material You (dark, Pixel-подобная) */
+
+/* Верхняя панель */
+#define TOPBAR_H 0
+#define TASKBAR_H 40
+
+static int dsk_clock_id  = -1;
+static int dsk_files_id  = -1;
+static int dsk_editor_id = -1;
+static int dsk_about_id  = -1;
+
+static int dsk_settings_id = -1;
+/* Меню Пуск */
+#define MENU_ITEMS 4
+static const char* menu_items[MENU_ITEMS] = { "Files", "Clock", "Settings", "About" };
+static int menu_open = 0;
+static int menu_sel  = 0;
+
+/* --- Рисование: круг --- */
+static void draw_circle(int cx, int cy, int r, uint32_t c) {
+    for (int y = -r; y <= r; y++)
+        for (int x = -r; x <= r; x++)
+            if (x*x + y*y <= r*r) fb_putpixel(cx + x, cy + y, c);
+}
+
+/* --- Приложения --- */
+
+static void dsk_clock_draw(int x, int y, int w, int h, void* user) {
+    (void)user;
+    extern volatile uint32_t ticks;
+    uint32_t secs = ticks / 100;
+
+    char buf[16];
+    int n = 0;
+    if (secs == 0) buf[n++] = '0';
+    else {
+        char tmp[12]; int m = 0;
+        while (secs > 0) { tmp[m++] = '0' + (secs % 10); secs /= 10; }
+        while (m > 0) buf[n++] = tmp[--m];
+    }
+    buf[n] = 0;
+
+    int tx = x + (w - n * 40) / 2;
+    int ty = y + (h - 60) / 2 - 15;
+
+    gfx_puts(tx, ty, buf, g_settings.on_surface, 5);
+    gfx_puts(x + w/2 - 30, ty + 60, "SECONDS", g_settings.on_variant, 1);
+}
+
+static void dsk_editor_draw(int x, int y, int w, int h, void* user) {
+    (void)user;
+    /* Внутреннее поле — закруглённое */
+    gfx_rounded_fill(x + 16, y + 16, w - 32, h - 50, 12, g_settings.surface);
+    gfx_rounded_outline(x + 16, y + 16, w - 32, h - 50, 12, g_settings.outline);
+    gfx_puts(x + 28, y + 28, "editor not implemented", g_settings.on_variant, 1);
+    gfx_puts(x + 28, y + h - 28, "> _", g_settings.primary, 1);
+}
+
+static void dsk_about_draw(int x, int y, int w, int h, void* user) {
+    (void)user; (void)h;
+
+    /* Логотип-кружок */
+    int cx = x + 60, cy = y + 60;
+    for (int dy = -32; dy <= 32; dy++)
+        for (int dx = -32; dx <= 32; dx++)
+            if (dx*dx + dy*dy <= 1024)
+                fb_putpixel(cx + dx, cy + dy, g_settings.primary);
+
+    /* Буква E в кружке */
+    gfx_puts(cx - 8, cy - 16, "E", g_settings.bg, 4);
+
+    /* Название */
+    gfx_puts(x + 120, y + 40, "EndixOS", g_settings.on_surface, 3);
+    gfx_puts(x + 120, y + 76, "V5.0", g_settings.primary, 2);
+
+    /* Разделитель */
+    for (int dx = 20; dx < w - 20; dx++)
+        fb_putpixel(x + dx, y + 115, g_settings.outline);
+
+    /* Описание */
+    gfx_puts(x + 20, y + 130, "Operating system", g_settings.on_surface, 1);
+    gfx_puts(x + 20, y + 150, "Built from scratch, 2026", g_settings.on_variant, 1);
+
+    /* Kernel subsystems */
+    gfx_puts(x + 20, y + 185, "Kernel subsystems:", g_settings.on_variant, 1);
+    gfx_puts(x + 20, y + 205, "GDT  IDT  PIC  PIT  PMM  PG", g_settings.on_surface, 1);
+    gfx_puts(x + 20, y + 223, "WM  ELF  FAT16  RING3  SYSCALLS", g_settings.on_surface, 1);
+    gfx_puts(x + 20, y + 241, "ATA PIO  SETTINGS  TERMINAL", g_settings.on_surface, 1);
+
+    /* Сеть — снизу, мелким */
+    gfx_puts(x + 20, y + 275, "Network: RTL8139 ARP DNS (WIP)", g_settings.on_variant, 1);
+}
+
+
+
+
+
+/* --- Декоративные точки --- */
+static void draw_dots(int x, int y, int cols, int rows, uint32_t c, int sp) {
+    for (int i = 0; i < rows; i++)
+        for (int j = 0; j < cols; j++)
+            fb_putpixel(x + j*sp, y + i*sp, c);
+}
+
+/* --- Верхняя панель --- */
+/* ============ Hyprland-style Bar ============ */
+
+static int workspaces_active = 0;   /* 0..4 */
+
+static void hypr_workspace_dot(int x, int y, int active) {
+    if (active) {
+        /* Активный — большая яркая точка с обводкой */
+        for (int dy = -6; dy <= 6; dy++)
+            for (int dx = -6; dx <= 6; dx++)
+                if (dx*dx + dy*dy <= 36)
+                    fb_putpixel(x + dx, y + dy, g_settings.primary);
+        for (int dy = -8; dy <= 8; dy++)
+            for (int dx = -8; dx <= 8; dx++) {
+                int d2 = dx*dx + dy*dy;
+                if (d2 > 36 && d2 <= 64)
+                    fb_putpixel(x + dx, y + dy, g_settings.primary_dim);
+            }
+    } else {
+        /* Неактивный — маленькая тусклая */
+        for (int dy = -3; dy <= 3; dy++)
+            for (int dx = -3; dx <= 3; dx++)
+                if (dx*dx + dy*dy <= 9)
+                    fb_putpixel(x + dx, y + dy, g_settings.outline);
+    }
+}
+
+static void draw_topbar(void) {
+    int W = (int)fb_width();
+    int H = 28;
+
+    /* Фон — блендинг с обоями (полупрозрачность) */
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            uint32_t bg = fb_getpixel(x, y);
+            uint32_t br = ((bg >> 16) & 0xFF);
+            uint32_t bgc = ((bg >> 8) & 0xFF);
+            uint32_t bb = (bg & 0xFF);
+
+            /* Смешиваем 25% обоев + 75% тёмного (сильнее blur) */
+            br = (br * 25 + 15 * 75) / 100;
+            bgc = (bgc * 25 + 15 * 75) / 100;
+            bb = (bb * 25 + 20 * 75) / 100;
+            if (br > 255) br = 255;
+            if (bgc > 255) bgc = 255;
+            if (bb > 255) bb = 255;
+            fb_putpixel(x, y, (br << 16) | (bgc << 8) | bb);
+        }
+    }
+
+    int cy = H / 2;
+
+    /* Яблоко (логотип-круг) */
+    int lx = 16;
+    for (int dy = -5; dy <= 5; dy++)
+        for (int dx = -5; dx <= 5; dx++)
+            if (dx*dx + dy*dy <= 25)
+                fb_putpixel(lx + dx, cy + dy, 0xFFFFFF);
+
+    /* Название жирным */
+    gfx_puts(28, cy - 4, "EndixOS", 0xFFFFFF, 1);
+
+    /* Активное окно — по центру */
+    extern int wm_focused(void);
+    extern const char* wm_title(int);
+    int f = wm_focused();
+    if (f >= 0) {
+        const char* t = wm_title(f);
+        int l = 0; while (t[l]) l++;
+        gfx_puts((W - l*8) / 2, cy - 4, t, 0xFFFFFF, 1);
+    }
+
+    /* === Правый угол: RTC часы + дата + индикаторы === */
+    extern volatile uint32_t ticks;
+
+    static struct rtc_time tm = {0};
+    static uint32_t last_rtc = 0;
+
+    if (last_rtc == 0 || ticks - last_rtc > 50) {
+        rtc_read(&tm);
+        last_rtc = ticks;
+    }
+
+    /* Формат: HH:MM:SS  Www DD Mmm */
+    char clock[40];
+    int cn = 0;
+    clock[cn++] = '0' + (tm.hour / 10) % 10;
+    clock[cn++] = '0' + tm.hour % 10;
+    clock[cn++] = ':';
+    clock[cn++] = '0' + (tm.minute / 10) % 10;
+    clock[cn++] = '0' + tm.minute % 10;
+    clock[cn++] = ':';
+    clock[cn++] = '0' + (tm.second / 10) % 10;
+    clock[cn++] = '0' + tm.second % 10;
+    clock[cn++] = ' ';
+    clock[cn++] = ' ';
+    const char* wd = rtc_weekday_name(tm.weekday);
+    for (int i = 0; wd[i] && cn < 30; i++) clock[cn++] = wd[i];
+    clock[cn++] = ' ';
+    if (tm.day < 10) clock[cn++] = '0' + tm.day;
+    else { clock[cn++] = '0' + tm.day/10; clock[cn++] = '0' + tm.day%10; }
+    clock[cn++] = ' ';
+    const char* mn = rtc_month_name(tm.month);
+    for (int i = 0; mn[i] && cn < 38; i++) clock[cn++] = mn[i];
+    clock[cn] = 0;
+
+    int clock_w = cn * 8;
+    gfx_puts(W - clock_w - 110, cy - 4, clock, 0xFFFFFF, 1);
+
+    /* Индикаторы справа: battery, wifi, search */
+    int ix = W - 56;
+
+    /* Battery */
+    gfx_box(ix, cy - 6, 22, 12, 0xFFFFFF);
+    gfx_box_fill(ix + 2, cy - 4, 16, 8, 0x40D040);
+    gfx_box_fill(ix + 22, cy - 3, 2, 6, 0xFFFFFF);
+
+    /* WiFi — круг */
+    ix -= 22;
+    for (int dy = -4; dy <= 4; dy++)
+        for (int dx = -3; dx <= 3; dx++)
+            if (dx*dx + dy*dy <= 9)
+                fb_putpixel(ix + dx, cy + dy, 0xFFFFFF);
+
+    /* Search — лупа */
+    ix -= 22;
+    for (int dy = -5; dy <= 5; dy++)
+        for (int dx = -5; dx <= 5; dx++) {
+            int d2 = dx*dx + dy*dy;
+            if (d2 >= 16 && d2 <= 25)
+                fb_putpixel(ix + dx, cy + dy, 0xFFFFFF);
+        }
+
+    /* Нижняя тонкая линия */
+    for (int x = 0; x < W; x++) {
+        uint32_t bg = fb_getpixel(x, H);
+        uint32_t br = (((bg >> 16) & 0xFF) + 0x40) / 2;
+        uint32_t bgc = (((bg >> 8) & 0xFF) + 0x40) / 2;
+        uint32_t bb = ((bg & 0xFF) + 0x40) / 2;
+        fb_putpixel(x, H, (br << 16) | (bgc << 8) | bb);
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* --- Таскбар --- */
+/* Нарисовать одну скруглённую иконку в доке */
+/* ====== Кастомные иконки для дока ====== */
+
+/* ============ КРАСИВЫЕ КАСТОМНЫЕ ИКОНКИ ============ */
+
+static void icon_folder(int x, int y, int sz) {
+    int w = sz - 18;
+    int h = (sz - 18) * 3 / 5;
+    int ox = x + 9;
+    int oy = y + (sz - h) / 2 + 4;
+
+    /* Язычок сверху (загнутая часть папки) */
+    gfx_rounded_fill(ox, oy - 6, w * 35 / 100, 10, 3, 0xD8A030);
+
+    /* Тело папки — жёлтый прямоугольник с лёгким градиентом */
+    for (int py = 0; py < h; py++) {
+        uint32_t top = 0xF8D060;
+        uint32_t bot = 0xE0A840;
+        uint32_t t = (py * 255) / h;
+        uint32_t r = (((top>>16)&0xFF)*(255-t) + ((bot>>16)&0xFF)*t) / 255;
+        uint32_t g = (((top>>8)&0xFF) *(255-t) + ((bot>>8)&0xFF) *t) / 255;
+        uint32_t b = ((top&0xFF)      *(255-t) + (bot&0xFF)      *t) / 255;
+        uint32_t col = (r<<16) | (g<<8) | b;
+
+        for (int px = 0; px < w; px++) {
+            /* Закругление только снизу */
+            int on = 1;
+            if (py >= h - 4) {
+                if (px < 4 && py >= h - 4) { int d = 4 - px; if (d*d > 16 - (h-1-py)*(h-1-py)) on = 0; }
+                if (px >= w - 4 && py >= h - 4) { int d = px - (w-5); if (d*d > 16 - (h-1-py)*(h-1-py)) on = 0; }
+            }
+            if (on) fb_putpixel(ox + px, oy + py, col);
+        }
+    }
+    /* Блик сверху */
+    for (int dx = 4; dx < w - 4; dx++)
+        fb_putpixel(ox + dx, oy + 1, 0xFFF0A0);
+}
+
+static void icon_clock(int x, int y, int sz) {
+    int cx = x + sz/2;
+    int cy = y + sz/2;
+    int r = sz/3;
+
+    /* Внешний круг — тёмный */
+    for (int dy = -r; dy <= r; dy++)
+        for (int dx = -r; dx <= r; dx++)
+            if (dx*dx + dy*dy <= r*r)
+                fb_putpixel(cx+dx, cy+dy, 0x202020);
+
+    /* Внутренний круг — белый */
+    for (int dy = -(r-2); dy <= (r-2); dy++)
+        for (int dx = -(r-2); dx <= (r-2); dx++)
+            if (dx*dx + dy*dy <= (r-2)*(r-2))
+                fb_putpixel(cx+dx, cy+dy, 0xFFFFFF);
+
+    /* 12 часовых меток */
+    for (int h = 0; h < 12; h++) {
+        /* Вектор от центра */
+        int vx = 0, vy = 0;
+        switch (h) {
+            case 0: vy = -1; break;
+            case 3: vx = 1; break;
+            case 6: vy = 1; break;
+            case 9: vx = -1; break;
+            case 1: vx = 1; vy = -2; break;
+            case 2: vx = 2; vy = -1; break;
+            case 4: vx = 2; vy = 1; break;
+            case 5: vx = 1; vy = 2; break;
+            case 7: vx = -1; vy = 2; break;
+            case 8: vx = -2; vy = 1; break;
+            case 10: vx = -2; vy = -1; break;
+            case 11: vx = -1; vy = -2; break;
+        }
+        for (int d = r - 3; d <= r - 2; d++) {
+            int px = cx + vx * d / 2;
+            int py = cy + vy * d / 2;
+            fb_putpixel(px, py, 0x404040);
+        }
+    }
+
+    /* Часовая стрелка (вправо) */
+    for (int d = 1; d < r - 3; d++)
+        for (int w = -1; w <= 1; w++)
+            fb_putpixel(cx + d, cy + w, 0x000000);
+
+    /* Минутная стрелка (вниз) */
+    for (int d = 1; d < r - 5; d++)
+        for (int w = -1; w <= 1; w++)
+            fb_putpixel(cx + w, cy + d, 0x000000);
+
+    /* Центральная точка */
+    fb_putpixel(cx, cy, 0xFF4040);
+}
+
+static void icon_gear(int x, int y, int sz) {
+    int cx = x + sz/2;
+    int cy = y + sz/2;
+    int r = sz / 3;
+    int teeth = 8;
+
+    /* Рисуем 8 зубцов */
+    for (int a = 0; a < teeth; a++) {
+        /* Угол в градусах */
+        int ang = a * 45;
+        /* Приближённые единичные векторы для 8 углов */
+        static const int dirs[8][2] = {
+            { 10,  0}, {  7,  7}, {  0, 10}, { -7,  7},
+            {-10,  0}, { -7, -7}, {  0,-10}, {  7, -7},
+        };
+        int dx = dirs[a][0];
+        int dy = dirs[a][1];
+        /* Зубец — 3x3 */
+        for (int t = 0; t < 4; t++) {
+            int px = cx + dx * (r - 1 + t) / 10;
+            int py = cy + dy * (r - 1 + t) / 10;
+            for (int oy2 = -1; oy2 <= 1; oy2++)
+                for (int ox2 = -1; ox2 <= 1; ox2++)
+                    fb_putpixel(px + ox2, py + oy2, 0x404040);
+        }
+        (void)ang;
+    }
+
+    /* Кольцо */
+    for (int dy = -r; dy <= r; dy++)
+        for (int dx = -r; dx <= r; dx++) {
+            int d2 = dx*dx + dy*dy;
+            if (d2 <= r*r && d2 >= (r-3)*(r-3))
+                fb_putpixel(cx+dx, cy+dy, 0x404040);
+        }
+
+    /* Внутренний круг */
+    for (int dy = -(r-6); dy <= (r-6); dy++)
+        for (int dx = -(r-6); dx <= (r-6); dx++)
+            if (dx*dx + dy*dy <= (r-6)*(r-6))
+                fb_putpixel(cx+dx, cy+dy, 0xFFFFFF);
+
+    /* Маленькая точка в центре */
+    fb_putpixel(cx, cy, 0x404040);
+}
+
+static void icon_terminal(int x, int y, int sz) {
+    /* Чёрный прямоугольник терминала */
+    int w = sz - 18;
+    int h = (sz - 18) * 3 / 5;
+    int ox = x + 9;
+    int oy = y + (sz - h) / 2 + 4;
+
+    /* Тёмный фон */
+    for (int py = 0; py < h; py++)
+        for (int px = 0; px < w; px++) {
+            int on = 1;
+            /* Закругление 3px */
+            if (px < 3 && py < 3 && px*px + py*py > 9) on = 0;
+            if (px >= w-3 && py < 3 && (w-1-px)*(w-1-px) + py*py > 9) on = 0;
+            if (px < 3 && py >= h-3 && px*px + (h-1-py)*(h-1-py) > 9) on = 0;
+            if (px >= w-3 && py >= h-3 && (w-1-px)*(w-1-px) + (h-1-py)*(h-1-py) > 9) on = 0;
+            if (on) fb_putpixel(ox + px, oy + py, 0x101010);
+        }
+
+    /* Символ ">" */
+    for (int d = 0; d < 5; d++) {
+        fb_putpixel(ox + 6 + d, oy + h/2 - 4 + d, 0x40FF40);
+        fb_putpixel(ox + 6 + d, oy + h/2 + 4 - d, 0x40FF40);
+        fb_putpixel(ox + 6 + d + 1, oy + h/2 - 4 + d, 0x40FF40);
+        fb_putpixel(ox + 6 + d + 1, oy + h/2 + 4 - d, 0x40FF40);
+    }
+    /* Подчёркивание "_" */
+    for (int d = 0; d < 6; d++) {
+        fb_putpixel(ox + 14 + d, oy + h/2 + 4, 0x40FF40);
+        fb_putpixel(ox + 14 + d, oy + h/2 + 5, 0x40FF40);
+    }
+}
+
+static void icon_snake(int x, int y, int sz) {
+    int cell = (sz - 20) / 4;
+    if (cell < 4) cell = 4;
+    int bx = x + (sz - cell*4) / 2;
+    int by = y + (sz - cell*3) / 2;
+
+    /* Тело змейки — изогнутое */
+    uint32_t body = 0x40C040;
+    uint32_t head = 0x80FF80;
+
+    /* Голова */
+    gfx_rounded_fill(bx, by, cell, cell, cell/3, head);
+
+    /* Тело — S-образная змейка */
+    gfx_rounded_fill(bx + cell, by, cell, cell, cell/3, body);
+    gfx_rounded_fill(bx + cell*2, by, cell, cell, cell/3, body);
+    gfx_rounded_fill(bx + cell*2, by + cell, cell, cell, cell/3, body);
+    gfx_rounded_fill(bx + cell, by + cell, cell, cell, cell/3, body);
+    gfx_rounded_fill(bx, by + cell, cell, cell, cell/3, body);
+    gfx_rounded_fill(bx, by + cell*2, cell, cell, cell/3, body);
+    gfx_rounded_fill(bx + cell, by + cell*2, cell, cell, cell/3, body);
+
+    /* Глазки */
+    fb_putpixel(bx + cell/3, by + cell/3, 0x000000);
+    fb_putpixel(bx + cell*2/3 + 1, by + cell/3, 0x000000);
+
+    /* Яблоко */
+    int ax = bx + cell*3;
+    int ay = by + cell*2;
+    for (int dy = -cell/3; dy <= cell/3; dy++)
+        for (int dx = -cell/3; dx <= cell/3; dx++)
+            if (dx*dx + dy*dy <= (cell/3)*(cell/3))
+                fb_putpixel(ax + cell/2 + dx, ay + cell/2 + dy, 0xFF4040);
+}
+
+static void icon_about(int x, int y, int sz) {
+    int cx = x + sz/2;
+    int cy = y + sz/2;
+    int r = sz/3;
+
+    /* Круг — белый с обводкой */
+    for (int dy = -r; dy <= r; dy++)
+        for (int dx = -r; dx <= r; dx++) {
+            int d2 = dx*dx + dy*dy;
+            if (d2 <= r*r)
+                fb_putpixel(cx+dx, cy+dy, 0x5050A0);
+        }
+    for (int dy = -(r-3); dy <= (r-3); dy++)
+        for (int dx = -(r-3); dx <= (r-3); dx++)
+            if (dx*dx + dy*dy <= (r-3)*(r-3))
+                fb_putpixel(cx+dx, cy+dy, 0xFFFFFF);
+
+    /* Буква "i" (info) */
+    gfx_puts(cx - 1, cy - 6, "i", 0x000000, 1);
+    /* Точка над i */
+    fb_putpixel(cx - 1, cy - 8, 0x000000);
+    fb_putpixel(cx, cy - 8, 0x000000);
+}
+
+void dock_draw_icon(int id, int x, int y, int sz) {
+    switch (id) {
+        case 0: icon_folder(x, y, sz);   break;
+        case 1: icon_clock(x, y, sz);    break;
+        case 2: icon_gear(x, y, sz);     break;
+        case 3: icon_terminal(x, y, sz); break;
+        case 4: icon_snake(x, y, sz);    break;
+        case 5: icon_about(x, y, sz);    break;
+
+        case 6: {   /* Matrix — зелёные символы */
+            int bx = x + 12, by = y + 12;
+            uint32_t greens[4] = { 0x80FF80, 0x40C040, 0x206020, 0x104010 };
+            for (int r = 0; r < 6; r++)
+                for (int c = 0; c < 6; c++) {
+                    uint32_t col = greens[(r + c) % 4];
+                    /* Символ как маленькая точка */
+                    for (int dy = 0; dy < 4; dy++)
+                        for (int dx = 0; dx < 4; dx++)
+                            fb_putpixel(bx + c*10 + dx, by + r*10 + dy, col);
+                }
+            break;
+        }
+
+        case 7: {   /* Power (Reboot) */
+            int cx = x + sz/2, cy = y + sz/2, r = sz/3;
+            /* Круг — обводка */
+            for (int dy = -r; dy <= r; dy++)
+                for (int dx = -r; dx <= r; dx++) {
+                    int d2 = dx*dx + dy*dy;
+                    if (d2 <= r*r && d2 >= (r-4)*(r-4))
+                        fb_putpixel(cx + dx, cy + dy, 0xFF5050);
+                }
+            /* Вертикальная полоса сверху (кнопка) */
+            for (int d = -r; d < 0; d++) {
+                fb_putpixel(cx - 2, cy + d, 0xFF5050);
+                fb_putpixel(cx - 1, cy + d, 0xFF5050);
+                fb_putpixel(cx + 0, cy + d, 0xFF5050);
+                fb_putpixel(cx + 1, cy + d, 0xFF5050);
+                fb_putpixel(cx + 2, cy + d, 0xFF5050);
+            }
+            break;
+        }
+    }
+}
+
+static void dock_icon(int x, int y, int sz, uint32_t c1, uint32_t c2, int id, int focused) {
+    int R = 16;
+
+    /* Фон — градиент */
+    for (int py = 0; py < sz; py++) {
+        uint32_t t = (py * 255) / sz;
+        uint32_t r = (((c1>>16)&0xFF)*(255-t) + ((c2>>16)&0xFF)*t) / 255;
+        uint32_t g = (((c1>>8)&0xFF) *(255-t) + ((c2>>8)&0xFF) *t) / 255;
+        uint32_t b = ((c1&0xFF)      *(255-t) + (c2&0xFF)      *t) / 255;
+
+        for (int px = 0; px < sz; px++) {
+            int on = 1;
+            int ccx = 0, ccy = 0;
+            if (px < R && py < R)                   { ccx = R - 1 - px;  ccy = R - 1 - py; }
+            else if (px >= sz-R && py < R)          { ccx = px-(sz-R);   ccy = R - 1 - py; }
+            else if (px < R && py >= sz-R)          { ccx = R - 1 - px;  ccy = py-(sz-R); }
+            else if (px >= sz-R && py >= sz-R)      { ccx = px-(sz-R);   ccy = py-(sz-R); }
+            else goto ok;
+            if (ccx*ccx + ccy*ccy > R*R) on = 0;
+ok:
+            if (on) fb_putpixel(x + px, y + py, (r<<16)|(g<<8)|b);
+        }
+    }
+
+    /* Кастомная иконка */
+    dock_draw_icon(id, x, y, sz);
+
+    /* Точка под активной */
+    if (focused) {
+        for (int dy = -2; dy <= 2; dy++)
+            for (int dx = -2; dx <= 2; dx++)
+                if (dx*dx + dy*dy <= 4)
+                    fb_putpixel(x + sz/2 + dx, y + sz + 6 + dy, 0xFFFFFF);
+    }
+}
+
+
+
+
+
+static int dock_hit_test(int mx, int my) {
+    int W = (int)fb_width();
+    int H = (int)fb_height();
+
+    #define DOCK_ICONS 6
+    int icon_sz = 56;
+    int gap = 6;
+    int pad = 10;
+    int dw = DOCK_ICONS * icon_sz + (DOCK_ICONS - 1) * gap + pad*2;
+    int dh = icon_sz + pad*2 + 10;
+    int dx = (W - dw) / 2;
+    int dy = H - dh - 6;
+
+    if (mx < dx || mx >= dx + dw || my < dy || my >= dy + dh)
+        return -1;
+
+    int rel_x = mx - dx - pad;
+    int idx = rel_x / (icon_sz + gap);
+    if (idx < 0 || idx >= DOCK_ICONS) return -1;
+    return idx;
+}
+
+static void draw_taskbar(void) {
+    int W = (int)fb_width();
+    int H = (int)fb_height();
+
+    /* Фиксированный набор иконок (не зависит от открытых окон) */
+    #define DOCK_ICONS 6
+    struct { const char* name; char letter; uint32_t c1, c2; } icons[DOCK_ICONS] = {
+        { "Files",    'F', 0x4A9FFF, 0x1A6FFF },   /* синий */
+        { "Clock",    'C', 0xFF8A3C, 0xE06020 },   /* оранжевый */
+        { "Settings", 'S', 0x9E9E9E, 0x606060 },   /* серый */
+        { "Terminal", 'T', 0x1A1A1A, 0x000000 },   /* чёрный */
+        { "Snake",    'K', 0x40C040, 0x208020 },   /* зелёный */
+        { "About",    'A', 0x8080D0, 0x4040A0 },   /* фиолетовый */
+    };
+
+    int icon_sz = 56;
+    int gap = 6;
+    int pad = 10;
+
+    int dw = DOCK_ICONS * icon_sz + (DOCK_ICONS - 1) * gap + pad*2;
+    int dh = icon_sz + pad*2 + 10;   /* +10 для точки-индикатора */
+    int dx = (W - dw) / 2;
+    int dy = H - dh - 6;
+
+    /* Фон док — сильнее blur, светлее */
+    for (int y = 0; y < dh; y++) {
+        for (int x = 0; x < dw; x++) {
+            int px = dx + x, py = dy + y;
+            int in_corner = 0;
+            int cx = 0, cy = 0;
+            int R = 20;
+            if (x < R && y < R)                   { cx = R - 1 - x;   cy = R - 1 - y;   in_corner = 1; }
+            else if (x >= dw-R && y < R)          { cx = x-(dw-R);    cy = R - 1 - y;   in_corner = 1; }
+            else if (x < R && y >= dh-R)          { cx = R - 1 - x;   cy = y-(dh-R);    in_corner = 1; }
+            else if (x >= dw-R && y >= dh-R)      { cx = x-(dw-R);    cy = y-(dh-R);    in_corner = 1; }
+            if (in_corner && cx*cx + cy*cy > R*R) continue;
+
+            uint32_t bg = fb_getpixel(px, py);
+            uint32_t br = ((bg >> 16) & 0xFF);
+            uint32_t bgc = ((bg >> 8) & 0xFF);
+            uint32_t bb = (bg & 0xFF);
+
+            /* 40% обоев + 60% полубелый */
+            br = (br * 40 + 200 * 60) / 100;
+            bgc = (bgc * 40 + 205 * 60) / 100;
+            bb = (bb * 40 + 215 * 60) / 100;
+            if (br > 255) br = 255;
+            if (bgc > 255) bgc = 255;
+            if (bb > 255) bb = 255;
+            fb_putpixel(px, py, (br << 16) | (bgc << 8) | bb);
+        }
+    }
+
+    /* Белая рамка сверху (highlight) */
+    for (int x = 20; x < dw - 20; x++) {
+        fb_putpixel(dx + x, dy, 0xFFFFFF);
+    }
+    /* Тёмная рамка снизу */
+    for (int x = 20; x < dw - 20; x++) {
+        fb_putpixel(dx + x, dy + dh - 1, 0x808080);
+    }
+
+    /* Иконки */
+    extern int wm_is_focused(int);
+    extern const char* wm_title(int);
+
+    int cx = dx + pad;
+    int cy = dy + pad;
+
+    for (int i = 0; i < DOCK_ICONS; i++) {
+        int foc = 0;
+        /* Проверим фокус по имени */
+        extern int wm_focused(void);
+        int f = wm_focused();
+        if (f >= 0 && wm_title(f)[0] == icons[i].letter) foc = 1;
+
+        dock_icon(cx, cy, icon_sz, icons[i].c1, icons[i].c2, i, foc);
+        cx += icon_sz + gap;
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* --- Меню Пуск --- */
+static void draw_menu(void) {
+    int mw = 180;
+    int mh = MENU_ITEMS * 32 + 16;
+    int mx = 12;
+    int my = (int)fb_height() - TASKBAR_H - mh - 8;
+
+    /* Тень + фон */
+    gfx_shadow(mx, my, mw, mh, 16, g_settings.bg);
+    gfx_rounded_fill(mx, my, mw, mh, 16, g_settings.surface2);
+    gfx_rounded_outline(mx, my, mw, mh, 16, g_settings.outline);
+
+    for (int i = 0; i < MENU_ITEMS; i++) {
+        int iy = my + 8 + i * 32;
+        int iw = mw - 16;
+
+        if (i == menu_sel) {
+            gfx_rounded_fill(mx + 8, iy, iw, 28, 10, g_settings.primary_dim);
+        }
+        /* Круглая иконка-точка слева */
+        uint32_t ic = (i == menu_sel) ? g_settings.primary : g_settings.on_variant;
+        draw_circle(mx + 24, iy + 14, 3, ic);
+        gfx_puts(mx + 40, iy + 10, menu_items[i],
+                 (i == menu_sel) ? g_settings.on_surface : g_settings.on_variant, 1);
+    }
+}
+
+/* --- Открытие приложений --- */
+void open_files(void) {
+    extern int wm_is_used(int);
+    if (dsk_files_id >= 0 && wm_is_used(dsk_files_id)) { wm_raise(dsk_files_id); return; }
+    extern void files_open(void);
+    files_open();
+    for (int i = 0; i < 8; i++) {
+        extern const char* wm_title(int);
+        if (wm_is_used(i)) {
+            const char* t = wm_title(i);
+            if (t[0]=='F' && t[1]=='i' && t[2]=='l' && t[3]=='e' && t[4]=='s')
+                dsk_files_id = i;
+        }
+    }
+}
+void open_clock(void) {
+    extern int wm_is_used(int);
+    if (dsk_clock_id >= 0 && wm_is_used(dsk_clock_id)) { wm_raise(dsk_clock_id); return; }
+    dsk_clock_id = wm_create("Clock", 560, 120, 320, 200, dsk_clock_draw, 0);
+}
+static void open_editor(void) {
+    extern int wm_is_used(int);
+    if (dsk_editor_id >= 0 && wm_is_used(dsk_editor_id)) { wm_raise(dsk_editor_id); return; }
+    dsk_editor_id = wm_create("Editor", 320, 180, 400, 280, dsk_editor_draw, 0);
+}
+void open_about(void) {
+    extern int wm_is_used(int);
+    if (dsk_about_id >= 0 && wm_is_used(dsk_about_id)) { wm_raise(dsk_about_id); return; }
+    dsk_about_id = wm_create("About", 350, 200, 400, 320, dsk_about_draw, 0);
+}
+
+/* --- Полный рендер --- */
+/* ====== Иконки рабочего стола (macOS-style) ====== */
+
+#define DESK_ICON_COUNT 5
+struct desk_icon {
+    const char* name;
+    int         x, y, w, h;
+    int         app_id;   /* 0=Files 1=Clock 2=Settings 3=Terminal */
+};
+static struct desk_icon desk_icons[DESK_ICON_COUNT] = {
+    { "Files",    30, 50,  72, 84, 0 },
+    { "Clock",    30, 150, 72, 84, 1 },
+    { "Settings", 30, 250, 72, 84, 2 },
+    { "Terminal", 30, 350, 72, 84, 3 },
+    { "Snake",    30, 450, 72, 84, 4 },
+};
+
+static void draw_desk_icons(void) {
+    for (int i = 0; i < DESK_ICON_COUNT; i++) {
+        struct desk_icon* ic = &desk_icons[i];
+
+        /* Цвет иконки по app_id */
+        uint32_t bg;
+        switch (ic->app_id) {
+            case 0: bg = 0x4A9FFF; break;  /* Files — синий */
+            case 1: bg = 0xFF8A3C; break;  /* Clock — оранжевый */
+            case 2: bg = 0x9E9E9E; break;  /* Settings — серый */
+            case 3: bg = 0x1A1A1A; break;  /* Terminal — чёрный */
+            default: bg = 0x606060;
+        }
+
+        /* Тень */
+        gfx_rounded_fill(ic->x + 2, ic->y + 2, 64, 64, 14, 0x000000);
+
+        /* Тело иконки */
+        gfx_rounded_fill(ic->x, ic->y, 64, 64, 14, bg);
+
+        /* Внутренний символ */
+        int cx = ic->x + 32;
+        int cy = ic->y + 32;
+        
+        switch (ic->app_id) {
+            case 0:  /* Files — папка */
+                gfx_box_fill(ic->x + 18, cy - 2, 28, 18, 0xFFFFFF);
+                gfx_box_fill(ic->x + 18, cy - 8, 12, 6, 0xFFFFFF);
+                break;
+            case 1:  /* Clock — циферблат */
+                for (int dy = -12; dy <= 12; dy++)
+                    for (int dx = -12; dx <= 12; dx++)
+                        if (dx*dx + dy*dy <= 144)
+                            fb_putpixel(cx + dx, cy + dy, 0xFFFFFF);
+                for (int d = 0; d < 8; d++)
+                    fb_putpixel(cx, cy - d, 0x000000);
+                for (int d = 0; d < 5; d++)
+                    fb_putpixel(cx + d, cy, 0x000000);
+                break;
+            case 2:  /* Settings — шестерёнка */
+                for (int dy = -11; dy <= 11; dy++)
+                    for (int dx = -11; dx <= 11; dx++)
+                        if (dx*dx + dy*dy <= 121)
+                            fb_putpixel(cx + dx, cy + dy, 0xFFFFFF);
+                for (int dy = -5; dy <= 5; dy++)
+                    for (int dx = -5; dx <= 5; dx++)
+                        if (dx*dx + dy*dy <= 25)
+                            fb_putpixel(cx + dx, cy + dy, bg);
+                break;
+            case 3:  /* Terminal — >_ зелёный */
+                gfx_puts(ic->x + 14, cy - 10, ">_", 0x00FF00, 3);
+                break;
+        }
+
+        /* Подпись с чёрной тенью */
+        int tl = 0; while (ic->name[tl]) tl++;
+        int tx = ic->x + (64 - tl*8) / 2;
+        gfx_puts(tx + 1, ic->y + 71, ic->name, 0x000000, 1);
+        gfx_puts(tx,     ic->y + 70, ic->name, 0xFFFFFF, 1);
+    }
+}
+
+
+
+static int desk_icon_hit(int mx, int my) {
+    for (int i = 0; i < DESK_ICON_COUNT; i++) {
+        struct desk_icon* ic = &desk_icons[i];
+        /* Hit-area на 8 пикселей больше со всех сторон */
+        if (mx >= ic->x - 8 && mx < ic->x + ic->w + 8 &&
+            my >= ic->y - 8 && my < ic->y + ic->h + 8)
+            return i;
+    }
+    return -1;
+}
+
+void desktop_render(void) {
+    extern void settings_draw_wallpaper(void);
+    settings_draw_wallpaper();
+
+    draw_topbar();
+    wm_render();
+    draw_taskbar();
+    virt_cursor_draw();
+    gfx_flush();
+}
+
+/* --- Главная команда --- */
+void menu_action(int menu_id, int item_id) {
+    /* File menu */
+    if (menu_id == 0) {
+        if (item_id == 0) { extern void terminal_open(void); terminal_open(); }
+        else if (item_id == 1) { extern void files_open(void); files_open(); }
+        else if (item_id == 2) { extern void settings_open(void); settings_open(); }
+        else if (item_id == 4) {
+            int f = wm_focused();
+            if (f >= 0) wm_close(f);
+        }
+        else if (item_id == 5) {
+            extern void cmd_reboot(void);
+            cmd_reboot();
+        }
+    }
+    /* Edit menu */
+    else if (menu_id == 1) {
+        /* Copy/Paste/Select All — заглушки */
+    }
+    /* View menu */
+    else if (menu_id == 2) {
+        if (item_id == 0) {
+            int f = wm_focused();
+            if (f >= 0) wm_maximize(f);
+        }
+        else if (item_id == 1) {
+            for (int i = 0; i < 8; i++) wm_minimize(i);
+        }
+        else if (item_id == 3) {
+            for (int i = 0; i < 8; i++) wm_close(i);
+        }
+    }
+    /* Help menu */
+    else if (menu_id == 3) {
+        if (item_id == 0) { extern void open_about(void); open_about(); }
+        else if (item_id == 3) {
+            extern void cmd_reboot(void);
+            cmd_reboot();
+        }
+    }
+}
+
+static void cmd_desktop(void);
+/* Обёртка — просто рендерит весь desktop */
+void desktop_render_tick(void);
+
+static void cmd_desktop(void) {
+    wm_init();
+    extern void menu_init(void);
+    menu_init();
+    menu_open = 0;
+    menu_sel = 0;
+    dsk_clock_id = -1;
+    dsk_files_id = -1;
+    dsk_editor_id = -1;
+    dsk_about_id = -1;
+    dsk_settings_id = -1;
+
+    /* Курсор в Menu bar, чтобы легко кликнуть File */
+    virt_cursor_x = 140;
+    virt_cursor_y = 8;
+
+    open_clock();
+
+    extern void terminal_open(void);
+    terminal_open();
+
+    desktop_render();
+
+
+    for (;;) {
+        int c = keyboard_getchar();
+
+        /* Проверка logout */
+        extern int g_terminal_wants_exit;
+        if (g_terminal_wants_exit) {
+            g_terminal_wants_exit = 0;
+            gfx_clear(0x000000);
+            gfx_flush();
+            wm_clear_all();
+            tty_clear();
+                    return;
+        }
+
+        /* ============ ГЛОБАЛЬНЫЕ ВЫХОДЫ — всегда работают ============ */
+
+
+        /* Tab — всегда переключает окна (никогда не идёт в терминал) */
+        if (c == '\t') {
+            wm_focus_next();
+            desktop_render();
+            continue;
+        }
+
+
+
+        /* =============== ПРИОРИТЕТ 1: Открыто меню =============== */
+        {
+            extern int menu_is_open(void);
+            extern int menu_handle_key(int);
+            if (menu_is_open()) {
+                menu_handle_key(c);
+                desktop_render();
+                continue;
+            }
+        }
+
+        /* =============== ПРИОРИТЕТ 2: Snake в фокусе =============== */
+        {
+            extern int snake_win_id(void);
+            extern void snake_handle_key(int);
+            if (snake_win_id() >= 0 && wm_is_focused(snake_win_id())) {
+                if (c == KEY_UP || c == KEY_DOWN || c == KEY_LEFT || c == KEY_RIGHT ||
+                    c == 'r' || c == 'R' || c == 'p' || c == 'P') {
+                    snake_handle_key(c);
+                    desktop_render();
+                    continue;
+                }
+            }
+        }
+
+        /* =============== ПРИОРИТЕТ 3: Terminal в фокусе =============== */
+        {
+            extern int terminal_win_id(void);
+            extern void terminal_handle_key(int);
+            if (terminal_win_id() >= 0 && wm_is_focused(terminal_win_id()) &&
+                (c == '\n' || c == '\b' || (c >= 32 && c < 127) || c == '\t')) {
+                terminal_handle_key(c);
+                desktop_render();
+                continue;
+            }
+        }
+
+        /* =============== ПРИОРИТЕТ 4: Settings в фокусе — стрелки =============== */
+        {
+            extern void settings_handle_key(int);
+            if (dsk_settings_id >= 0 && wm_is_focused(dsk_settings_id) &&
+                (c == KEY_UP || c == KEY_DOWN || c == KEY_LEFT || c == KEY_RIGHT)) {
+                settings_handle_key(c);
+                desktop_render();
+                continue;
+            }
+        }
+
+        /* =============== ПРИОРИТЕТ 5: Глобальные горячие клавиши =============== */
+        if (c == KEY_F1)  { open_files();  desktop_render(); continue; }
+        if (c == KEY_F2)  { open_clock();  desktop_render(); continue; }
+        if (c == KEY_F3)  {
+            extern void settings_open(void);
+            settings_open();
+            for (int i = 0; i < 8; i++) {
+                if (wm_is_used(i)) {
+                    extern const char* wm_title(int);
+                    const char* t = wm_title(i);
+                    if (t[0]=='S' && t[1]=='e' && t[2]=='t') dsk_settings_id = i;
+                }
+            }
+            desktop_render(); continue;
+        }
+        if (c == KEY_F4)  { open_about();  desktop_render(); continue; }
+        if (c == KEY_F5)  { extern void terminal_open(void); terminal_open(); desktop_render(); continue; }
+        if (c == KEY_F6)  { extern void snake_open(void); snake_open(); desktop_render(); continue; }
+        if (c == KEY_F8)  {
+            extern void run_launchpad(void);
+            run_launchpad();
+            desktop_render();
+            continue;
+        }
+
+        /* M — открыть Menu bar dropdown */
+        if (c == 'm' || c == 'M') {
+            extern void menu_open_by_index(int);
+            menu_open_by_index(0);
+            desktop_render(); continue;
+        }
+
+
+
+
+        /* Q — закрыть фокусное */
+        /* Q или Ctrl+Q — закрыть фокусное окно */
+        if (c == 'q' || c == 'Q' || c == 17) {
+            int f = wm_focused();
+            if (f >= 0) { wm_close(f); desktop_render(); }
+            continue;
+        }
+
+        /* ESC — выйти в shell */
+        
+
+        /* Tab — следующее окно */
+        if (c == '\t') { wm_focus_next(); desktop_render(); continue; }
+
+        /* =============== ПРИОРИТЕТ 6: Движение курсора =============== */
+        if (c == KEY_UP) {
+            {
+                int ox = virt_cursor_x, oy = virt_cursor_y;
+                virt_cursor_erase();
+                virt_cursor_y -= 8;
+                if (virt_cursor_y < 30) virt_cursor_y = 30;
+                virt_cursor_draw();
+                extern void gfx_flush_rect(int, int, int, int);
+                gfx_flush_rect(ox - 20, oy - 20, 60, 60);
+                gfx_flush_rect(virt_cursor_x - 20, virt_cursor_y - 20, 60, 60);
+            }
+            continue;
+        }
+        if (c == KEY_DOWN) {
+            {
+                int ox = virt_cursor_x, oy = virt_cursor_y;
+                virt_cursor_erase();
+                virt_cursor_y += 8;
+                if (virt_cursor_y >= (int)fb_height() - 20) virt_cursor_y = (int)fb_height() - 21;
+                virt_cursor_draw();
+                extern void gfx_flush_rect(int, int, int, int);
+                gfx_flush_rect(ox - 20, oy - 20, 60, 60);
+                gfx_flush_rect(virt_cursor_x - 20, virt_cursor_y - 20, 60, 60);
+            }
+            continue;
+        }
+        if (c == KEY_LEFT) {
+            {
+                int ox = virt_cursor_x, oy = virt_cursor_y;
+                virt_cursor_erase();
+                virt_cursor_x -= 8;
+                if (virt_cursor_x < 0) virt_cursor_x = 0;
+                virt_cursor_draw();
+                extern void gfx_flush_rect(int, int, int, int);
+                gfx_flush_rect(ox - 20, oy - 20, 60, 60);
+                gfx_flush_rect(virt_cursor_x - 20, virt_cursor_y - 20, 60, 60);
+            }
+            continue;
+        }
+        if (c == KEY_RIGHT) {
+            {
+                int ox = virt_cursor_x, oy = virt_cursor_y;
+                virt_cursor_erase();
+                virt_cursor_x += 8;
+                if (virt_cursor_x >= (int)fb_width() - 20) virt_cursor_x = (int)fb_width() - 21;
+                virt_cursor_draw();
+                extern void gfx_flush_rect(int, int, int, int);
+                gfx_flush_rect(ox - 20, oy - 20, 60, 60);
+                gfx_flush_rect(virt_cursor_x - 20, virt_cursor_y - 20, 60, 60);
+            }
+            continue;
+        }
+
+        /* Space — клик */
+        if (c == ' ' || c == '\n') {
+            int cx = virt_cursor_x + 6;
+            int cy = virt_cursor_y + 6;
+
+            /* Клик по доку */
+            {
+                extern void open_files(void);
+                extern void open_clock(void);
+                extern void settings_open(void);
+                extern void terminal_open(void);
+                extern void snake_open(void);
+                extern void open_about(void);
+                int di = dock_hit_test(cx, cy);
+                if (di >= 0) {
+                    if      (di == 0) open_files();
+                    else if (di == 1) open_clock();
+                    else if (di == 2) settings_open();
+                    else if (di == 3) terminal_open();
+                    else if (di == 4) snake_open();
+                    else if (di == 5) open_about();
+                    desktop_render();
+                    continue;
+                }
+            }
+
+            /* Клик по логотипу EndixOS в topbar (верхний левый угол) */
+            if (cy < 28 && cx < 90) {
+                extern void run_launchpad(void);
+                run_launchpad();
+                desktop_render();
+                continue;
+            }
+
+            /* Клик по воркспейсам слева */
+            if (cy < 30 && cx < 140 && cx >= 8) {
+                int ws = (cx - 8) / 24;
+                if (ws >= 0 && ws < 5) {
+                    workspaces_active = ws;
+                    desktop_render(); continue;
+                }
+            }
+
+            /* Иконки desktop */
+            {
+                extern int desk_icon_hit(int, int);
+                int idx = desk_icon_hit(cx, cy);
+                if (idx >= 0) {
+                    int app = desk_icons[idx].app_id;
+                    extern void open_files(void);
+                    extern void settings_open(void);
+                    extern void terminal_open(void);
+                    extern void snake_open(void);
+                    if (app == 0) open_files();
+                    else if (app == 1) open_clock();
+                    else if (app == 2) settings_open();
+                    else if (app == 3) terminal_open();
+                    else if (app == 4) snake_open();
+                    desktop_render(); continue;
+                }
+            }
+
+            /* Traffic lights */
+            {
+                extern int wm_close_button_hit(int, int);
+                extern int wm_minimize_button_hit(int, int);
+                extern int wm_maximize_button_hit(int, int);
+                int cb = wm_close_button_hit(cx, cy);
+                if (cb >= 0) { wm_close(cb); desktop_render(); continue; }
+                int mb = wm_minimize_button_hit(cx, cy);
+                if (mb >= 0) { wm_minimize(mb); desktop_render(); continue; }
+                int xb = wm_maximize_button_hit(cx, cy);
+                if (xb >= 0) { wm_maximize(xb); desktop_render(); continue; }
+            }
+
+            /* Тело окна */
+            {
+                extern int wm_hit_test(int, int);
+                int h = wm_hit_test(cx, cy);
+                if (h >= 0) { wm_raise(h); desktop_render(); continue; }
+            }
+        }
+    }
+}
+
+
+
+
+static void cmd_mdbg(void) {
+    extern void mouse_toggle_verbose(void);
+    mouse_toggle_verbose();
+    tty_puts("[mouse] debug toggled — смотри serial при движении мыши\n");
+}
+
+static void cmd_net(void) {
+    extern int net_ready(void);
+    extern uint32_t net_ip(void);
+    extern void net_get_mac(uint8_t*);
+    if (!net_ready()) { tty_puts("network not ready\n"); return; }
+    uint8_t mac[6];
+    net_get_mac(mac);
+    tty_puts("MAC: "); 
+    for (int i = 0; i < 6; i++) {
+        tty_put_hex(mac[i]);
+        if (i < 5) tty_puts(":");
+    }
+    tty_puts("\nIP:  ");
+    tty_put_hex(net_ip());
+    tty_puts("\n");
+}
+
+static void cmd_arp(const char* arg) {
+    /* parse 10.0.2.2 */
+    uint32_t ip = 0;
+    int part = 0;
+    uint32_t cur = 0;
+    while (*arg) {
+        if (*arg >= '0' && *arg <= '9') cur = cur * 10 + (*arg - '0');
+        else if (*arg == '.') {
+            ip = (ip << 8) | (cur & 0xFF);
+            cur = 0;
+            part++;
+        }
+        arg++;
+    }
+    ip = (ip << 8) | (cur & 0xFF);
+    extern void arp_send_request(uint32_t);
+    arp_send_request(ip);
+}
+
+static uint32_t parse_hex(const char* s) {
+    if (s[0]=='0' && (s[1]=='x' || s[1]=='X')) s += 2;
+    uint32_t v = 0;
+    while (*s) {
+        char c = *s++;
+        uint32_t d;
+        if      (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+        else break;
+        v = (v << 4) | d;
+    }
+    return v;
+}
+
+static void cmd_execute(char* cmd) {
+    int n = 0;
+    while (cmd[n]) n++;
+    while (n > 0 && (cmd[n-1] == ' ' || cmd[n-1] == '\t')) cmd[--n] = 0;
+    if (n == 0) return;
+
+    if      (str_eq(cmd, "help"))    cmd_help();
+    else if (str_eq(cmd, "clear"))   tty_clear();
+    else if (str_eq(cmd, "ticks")) {
+        tty_puts("ticks = "); tty_put_hex(ticks);
+        tty_puts(" (~"); tty_put_hex(ticks / 100); tty_puts("s)\n");
+    }
+    else if (str_eq(cmd, "cpu"))     cmd_cpu();
+    else if (str_eq(cmd, "mem"))     cmd_mem();
+    else if (str_eq(cmd, "paging"))  cmd_paging();
+    else if (str_eq(cmd, "alloc")) {
+        void* p = pmm_alloc_page();
+        if (!p) tty_puts("alloc failed\n");
+        else { tty_puts("page @ "); tty_put_hex((uint32_t)p);
+               tty_puts(", free now "); tty_put_hex(pmm_free_pages()); tty_putc('\n'); }
+    }
+    else if (str_starts(cmd, "free ")) {
+        uint32_t a = parse_hex(cmd + 5);
+        pmm_free_page((void*)a);
+        tty_puts("freed "); tty_put_hex(a);
+        tty_puts(", free now "); tty_put_hex(pmm_free_pages()); tty_putc('\n');
+    }
+    else if (str_eq(cmd, "testpf")) {
+        tty_puts("Unmapping 16 MB, then reading 0x1000000...\n");
+        paging_unmap(0x1000000);
+        volatile uint32_t* p = (uint32_t*)0x1000000;
+        (void)*p;
+        tty_puts("If you see this, page fault did NOT fire!\n");
+    }
+    else if (str_eq(cmd, "heap")) {
+        tty_puts("heap total = "); tty_put_hex(heap_total()); tty_putc('\n');
+        tty_puts("heap used  = "); tty_put_hex(heap_used());  tty_putc('\n');
+        tty_puts("heap free  = "); tty_put_hex(heap_free());  tty_putc('\n');
+    }
+    else if (str_starts(cmd, "kmalloc ")) {
+        uint32_t n = parse_hex(cmd + 8);
+        void* p = kmalloc(n);
+        if (!p) tty_puts("kmalloc failed\n");
+        else {
+            tty_puts("kmalloc("); tty_put_hex(n); tty_puts(") -> ");
+            tty_put_hex((uint32_t)p); tty_putc('\n');
+        }
+    }
+    else if (str_starts(cmd, "kfree ")) {
+        uint32_t a = parse_hex(cmd + 6);
+        kfree((void*)a);
+        tty_puts("kfree("); tty_put_hex(a); tty_puts(")\n");
+    }
+    else if (str_eq(cmd, "spawn")) {
+        if (thread_create(task_a, "task_a") < 0) tty_puts("spawn A failed\n");
+        if (thread_create(task_b, "task_b") < 0) tty_puts("spawn B failed\n");
+    }
+    else if (str_eq(cmd, "ps")) {
+        tty_puts("id  state    ticks     name\n");
+        for (int i = 0; i < thread_count(); i++) {
+            thread_t* t = thread_get(i);
+            tty_put_hex(t->id); tty_puts("   ");
+            if      (t->state == 1) tty_puts("ready  ");
+            else if (t->state == 2) tty_puts("run    ");
+            else if (t->state == 3) tty_puts("dead   ");
+            else                    tty_puts("free   ");
+            tty_put_hex(t->ticks); tty_puts("  ");
+            tty_puts(t->name);
+            if (i == thread_current_id()) tty_puts("  <-");
+            tty_putc('\n');
+        }
+    }
+    else if (str_eq(cmd, "yield")) {
+        tty_puts("yielding...\n");
+        thread_yield();
+        tty_puts("back from yield\n");
+    }
+    else if (str_eq(cmd, "spawn_sleeper")) {
+        if (thread_create(task_sleeper, "sleeper") < 0) tty_puts("failed\n");
+    }
+    else if (str_eq(cmd, "sleeper")) {
+        tty_puts("sleeper counter = "); tty_put_hex(counter_sleep); tty_putc('\n');
+    }
+    else if (str_eq(cmd, "counters")) {
+        tty_puts("counter_a = "); tty_put_hex(counter_a); tty_putc('\n');
+        tty_puts("counter_b = "); tty_put_hex(counter_b); tty_putc('\n');
+    }
+    else if (str_eq(cmd, "usertest")) {
+        thread_create(user_task, "user");
+    }
+    else if (str_eq(cmd, "run")) {
+        if (!g_mod_start[0]) {
+            tty_puts("no ELF module loaded by GRUB\n");
+        } else {
+            elf_run_start = g_mod_start[0];
+            elf_run_end   = g_mod_end[0];
+            thread_create(elf_task, "elf");
+        }
+    }
+    else if (str_eq(cmd, "ush")) {
+        if (!g_mod_start[0]) {
+            tty_puts("no shell.elf module\n");
+        } else {
+            elf_run_start = g_mod_start[0];
+            elf_run_end   = g_mod_end[0];
+            int id = thread_create(elf_task, "ush");
+            if (id > 0) {
+                /* Ждём завершения ush — это правильный wait */
+                extern int thread_wait(int);
+                int code = thread_wait(id);
+                tty_puts("\nush exited with code ");
+                tty_put_hex(code);
+                tty_putc('\n');
+            }
+        }
+    }
+    else if (str_eq(cmd, "disk"))    cmd_disk();
+    else if (str_eq(cmd, "ls"))      cmd_ls();
+    else if (str_starts(cmd, "cat ")) cmd_cat(cmd + 4);
+    else if (str_eq(cmd, "demo"))     cmd_gfx_demo();
+    else if (str_eq(cmd, "mouse"))    cmd_mouse();
+    else if (str_eq(cmd, "mdbg"))     cmd_mdbg();
+    else if (str_eq(cmd, "net"))      cmd_net();
+    else if (str_starts(cmd, "arp ")) cmd_arp(cmd + 4);
+    else if (str_eq(cmd, "ux"))       cmd_ux();
+    else if (str_eq(cmd, "desktop"))  cmd_desktop();
+    else if (str_eq(cmd, "gradient")) cmd_gfx_gradient();
+    else if (str_starts(cmd, "clear ")) cmd_gfx_clear(cmd + 6);
+    else if (str_starts(cmd, "box "))   cmd_gfx_box(cmd + 4);
+    else if (str_starts(cmd, "circle ")) cmd_gfx_circle(cmd + 7);
+    else if (str_starts(cmd, "line "))  cmd_gfx_line(cmd + 5);
+    else if (str_eq(cmd, "reboot"))  cmd_reboot();
+    else if (str_eq(cmd, "halt")) {
+        tty_puts("System halted.\n");
+        for (;;) __asm__ volatile ("cli; hlt");
+    }
+    else if (str_starts(cmd, "echo ")) { tty_puts(cmd + 5); tty_putc('\n'); }
+    else if (str_eq(cmd, "echo"))    tty_putc('\n');
+    else { tty_puts("Unknown: "); tty_puts(cmd); tty_puts("\n"); }
+}
+
+/* ================= SHELL ================= */
+#define LINE_MAX 128
+#define HIST_MAX 16
+
+static char line[LINE_MAX];
+static int  line_len = 0;
+static int  cursor   = 0;
+
+static char hist[HIST_MAX][LINE_MAX];
+static int  hist_count = 0;
+static int  hist_pos   = -1;   /* -1 = редактируем новую */
+
+static const char* cmd_list[] = {
+    "help", "clear", "echo", "ticks", "cpu", "mem", "paging",
+    "heap", "kmalloc", "kfree", "alloc", "free", "testpf",
+    "ls", "cat", "disk", "clear", "demo", "gradient", "box",
+    "circle", "line", "mouse", "run", "ush", "reboot", "halt",
+    0
+};
+
+static void print_prompt(void) {
+    tty_set_color(0x0B);
+    tty_puts("endix> ");
+    tty_set_color(0x0A);
+}
+
+/* Перерисовать текущую строку ввода */
+static void redraw(int old_len) {
+    int drawn = (line_len > old_len) ? line_len : old_len;
+    tty_putc('\r');
+    tty_puts_nf("endix> ");
+    for (int i = 0; i < line_len; i++) tty_putc(line[i]);
+    for (int i = line_len; i < drawn; i++) tty_putc(' ');
+    for (int i = 0; i < drawn - cursor; i++) tty_putc('\b');
+    tty_flush();
+}
+
+static void push_history(const char* s) {
+    if (!s[0]) return;
+    if (hist_count > 0 && str_eq((char*)hist[(hist_count-1) % HIST_MAX], s)) return;
+    int idx = hist_count % HIST_MAX;
+    int i = 0;
+    while (s[i] && i < LINE_MAX - 1) { hist[idx][i] = s[i]; i++; }
+    hist[idx][i] = 0;
+    hist_count++;
+}
+
+static void load_history(int delta) {
+    if (hist_count == 0) return;
+    int old = line_len;
+    int p = hist_pos < 0 ? hist_count : hist_pos;
+    p += delta;
+    if (p < 0) p = 0;
+    if (p > hist_count) p = hist_count;
+    hist_pos = p;
+    if (p == hist_count) { line_len = 0; line[0] = 0; }
+    else {
+        const char* h = hist[p % HIST_MAX];
+        int i = 0;
+        while (h[i] && i < LINE_MAX - 1) { line[i] = h[i]; i++; }
+        line_len = i;
+    }
+    cursor = line_len;
+    redraw(old);
+}
+
+/* Tab completion */
+static void do_complete(void) {
+    if (line_len == 0) return;
+
+    char* last = line;
+    for (int i = line_len - 1; i >= 0; i--)
+        if (line[i] == ' ') { last = line + i + 1; break; }
+
+    int len = line_len - (int)(last - line);
+    const char* match = 0;
+    int match_count = 0;
+
+    for (int i = 0; cmd_list[i]; i++) {
+        int ok = 1;
+        for (int j = 0; j < len; j++)
+            if (cmd_list[i][j] != last[j]) { ok = 0; break; }
+        if (!ok) continue;
+        match = cmd_list[i];
+        match_count++;
+    }
+
+    if (match_count == 0) return;
+
+    /* Дописываем общий префикс */
+    int old = line_len;
+    for (int k = len; match[k]; k++) {
+        if (line_len < LINE_MAX - 1) {
+            line[line_len++] = match[k];
+            cursor = line_len;
+        }
+    }
+    if (line_len < LINE_MAX - 1) {
+        line[line_len++] = ' ';
+        cursor = line_len;
+    }
+    line[line_len] = 0;
+    redraw(old);
+
+    /* Если совпадений много — показываем список */
+    if (match_count > 1) {
+        tty_putc('\n');
+        int printed = 0;
+        for (int i = 0; cmd_list[i]; i++) {
+            int ok = 1;
+            for (int j = 0; j < len; j++)
+                if (cmd_list[i][j] != last[j]) { ok = 0; break; }
+            if (!ok) continue;
+            tty_puts(cmd_list[i]);
+            tty_puts("  ");
+            printed++;
+            if (printed % 5 == 0) tty_putc('\n');
+        }
+        if (printed % 5) tty_putc('\n');
+        tty_putc('\n');
+        old = 0;
+        print_prompt();
+        for (int i = 0; i < line_len; i++) tty_putc(line[i]);
+    }
+}
+
+static void shell_loop(void) {
+    print_prompt();
+    for (;;) {
+        int c = keyboard_getchar();
+
+        if (c == '\n') {
+            tty_putc('\n');
+            line[line_len] = 0;
+            push_history(line);
+            hist_pos = -1;
+            cmd_execute(line);
+            line_len = 0;
+            cursor = 0;
+            print_prompt();
+        }
+        else if (c == '\b') {
+            if (cursor > 0) {
+                if (cursor == line_len) {
+                    /* Удаление последнего символа: двигаемся влево и стираем клетку */
+                    line_len--; cursor--;
+                    line[line_len] = 0;
+                    tty_putc('\b');
+                    tty_erase_cell();
+                    tty_flush();
+                } else {
+                    int old = line_len;
+                    for (int i = cursor - 1; i < line_len - 1; i++) line[i] = line[i+1];
+                    line_len--; cursor--;
+                    line[line_len] = 0;
+                    redraw(old);
+                }
+            }
+        }
+        else if (c == KEY_DELETE) {
+            if (cursor < line_len) {
+                int old = line_len;
+                for (int i = cursor; i < line_len - 1; i++) line[i] = line[i+1];
+                line_len--;
+                line[line_len] = 0;
+                redraw(old);
+            }
+        }
+        else if (c == KEY_LEFT)  { if (cursor > 0) { cursor--; tty_putc('\b'); tty_flush(); } }
+        else if (c == KEY_RIGHT) { if (cursor < line_len) { tty_putc(line[cursor]); cursor++; tty_flush(); } }
+        else if (c == KEY_HOME)  { while (cursor > 0) { cursor--; tty_putc('\b'); } tty_flush(); }
+        else if (c == KEY_END)   { while (cursor < line_len) { tty_putc(line[cursor]); cursor++; } tty_flush(); }
+        else if (c == KEY_UP)    { load_history(-1); }
+        else if (c == KEY_DOWN)  { load_history(+1); }
+        else if (c == '\t')     { do_complete(); }
+        else if (c >= 32 && c < 127) {
+            if (line_len < LINE_MAX - 1) {
+                if (cursor == line_len) {
+                    /* Простой ввод в конец */
+                    line[line_len++] = (char)c;
+                    cursor = line_len;
+                    line[line_len] = 0;
+                    tty_putc((char)c);
+                    tty_flush();
+                } else {
+                    /* Вставка в середину */
+                    int old = line_len;
+                    for (int i = line_len; i > cursor; i--) line[i] = line[i-1];
+                    line[cursor] = (char)c;
+                    line_len++; cursor++;
+                    line[line_len] = 0;
+                    redraw(old);
+                }
+            }
+        }
+    }
+}
+
+void kernel_main(uint32_t magic, uint32_t mb_info) {
+    serial_init();
+    serial_puts("\n[serial] EndixOS kernel started\n");
+    serial_puts("[serial] magic="); serial_put_hex(magic); serial_putc('\n');
+    serial_puts("[serial] mb_info="); serial_put_hex(mb_info); serial_putc('\n');
+
+    if (fb_init((struct multiboot_info*)mb_info) != 0) {
+        serial_puts("[serial] fb_init FAILED, halting\n");
+        for (;;) __asm__ volatile ("cli; hlt");
+    }
+    serial_puts("[serial] fb_init OK\n");
+
+    tty_clear();
+    tty_puts("Hello from EndixOS!\n");
+    if (magic != MULTIBOOT_BOOTLOADER_MAGIC) {
+        tty_set_color(0x0C);
+        tty_puts("bad magic "); tty_put_hex(magic); tty_putc('\n');
+        for (;;) __asm__ volatile ("cli; hlt");
+    }
+    tty_puts("Multiboot magic ok\n");
+
+    gdt_init();  tty_puts("[ok] GDT loaded\n");
+    idt_init();  tty_puts("[ok] IDT loaded\n");
+    irq_init();  tty_puts("[ok] PIC remapped\n");
+    irq_install_handler(0, timer_cb);
+    pic_clear_mask(0);
+    pit_init(100);   tty_puts("[ok] PIT at 100 Hz\n");
+    keyboard_init();
+    usb_tablet_init(); pic_clear_mask(1);
+    tty_puts("[ok] Keyboard ready\n");
+
+    pmm_init(mb_info);
+    anim_init();
+    net_init();
+    ata_init();
+    fat16_init();
+    settings_init();
+
+    {
+        struct multiboot_info* mbi = (struct multiboot_info*)mb_info;
+        if (mbi->flags & (1u << 3)) {
+            struct multiboot_module* mods = (struct multiboot_module*)mbi->mods_addr;
+            uint32_t n = mbi->mods_count;
+            if (n > MAX_MODULES) n = MAX_MODULES;
+            for (uint32_t i = 0; i < n; i++) {
+                g_mod_start[i] = mods[i].mod_start;
+                g_mod_end  [i] = mods[i].mod_end;
+                tty_puts("[ok] Module "); tty_put_hex(i);
+                tty_puts(" @ "); tty_put_hex(g_mod_start[i]);
+                tty_puts(" .. "); tty_put_hex(g_mod_end[i]);
+                tty_putc('\n');
+            }
+        }
+    }
+
+    thread_init();
+    /* kernel-поток (id=0) использует тот же стек, что и boot: не важно какой,
+       потому что он уже в ring0. Ставим значение, чтобы TSS не был 0. */
+    thread_get(0)->kernel_stack_top = (uint32_t)&syscall_stack[0] + sizeof(syscall_stack);
+
+    paging_init();
+    if (paging_enable() == 0)
+        tty_puts("[ok] Paging enabled\n");
+
+    heap_init();
+    fb_backbuffer_init();
+
+    __asm__ volatile ("sti");
+    tty_puts("[ok] Interrupts enabled\n\n");
+    tty_puts("Welcome to EndixOS. Type 'help'.\n\n");
+    tty_puts("[kernel] Starting desktop...\n");
+    extern void cmd_desktop(void);
+    cmd_desktop();
+    tty_clear();
+    shell_loop();
+}

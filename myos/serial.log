@@ -1,0 +1,12 @@
+
+[serial] EndixOS kernel started
+[serial] magic=0x2badb002
+[serial] mb_info=0x00010000
+[fb] flags = 0x0000126f
+[serial] fb_init OK
+[usb] no UHCI controller
+[rtl] io=0x0000c000
+[rtl] mac=0x00000052:0x00000054:0x00000000:0x00000012:0x00000034:0x00000056
+[arp] request for 0x0a000202
+[fetch] arg=' 1.1.1.1'
+[fetch] host='' i=0x00000000
