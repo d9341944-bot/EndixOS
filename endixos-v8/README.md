@@ -1,8 +1,8 @@
-# EndixOS v8
+# EndixOS v8.0 alpha 5
 
 Своя ОС с нуля: 32-бит x86, ядро на C и ассемблере, графический рабочий стол в духе macOS.
 
-## Запуск (Arch / CachyOS)
+## Запуск (Arch)
 
 ```
 sudo pacman -S --needed qemu-system-x86 nasm gcc make grub xorriso mtools
