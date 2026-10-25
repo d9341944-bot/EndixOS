@@ -1,4 +1,4 @@
-# EndixOS v8.0 alpha 5
+# EndixOS v8.0 alpha 12
 
 > An operating system built completely from scratch.  
 > No Linux. No Unix. Not POSIX. Just a fully custom OS.
