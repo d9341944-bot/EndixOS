@@ -139,6 +139,10 @@ static void kbd_byte(u8 b)
         case 0x4B: event_push(EV_KEY, KEY_LEFT,   k_ctrl, 0); break;
         case 0x4D: event_push(EV_KEY, KEY_RIGHT,  k_ctrl, 0); break;
         case 0x53: event_push(EV_KEY, KEY_DELETE, k_ctrl, 0); break;
+        case 0x49: event_push(EV_KEY, KEY_PGUP,   k_ctrl, 0); break;
+        case 0x51: event_push(EV_KEY, KEY_PGDN,   k_ctrl, 0); break;
+        case 0x47: event_push(EV_KEY, KEY_HOME,   k_ctrl, 0); break;
+        case 0x4F: event_push(EV_KEY, KEY_END,    k_ctrl, 0); break;
         default: break;
         }
         return;
@@ -151,6 +155,10 @@ static void kbd_byte(u8 b)
     if (sc == 0x3A) { k_caps = !k_caps; return; }
     if (sc == 0x3C) {                     /* F2 */
         event_push(EV_KEY, KEY_F2, k_ctrl, 0);
+        return;
+    }
+    if (sc == 0x3D) {                     /* F3: Mission Control */
+        event_push(EV_KEY, KEY_F3, k_ctrl, 0);
         return;
     }
     if (sc >= sizeof(map_normal))

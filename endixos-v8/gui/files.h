@@ -7,7 +7,9 @@
 #define FILES_W 720
 #define FILES_H 416
 
+void files_set_size(i32 w, i32 h);                 /* размер области содержимого окна */
 void files_new_folder(void);                       /* меню File: New Folder */
+void files_goto(int node);                         /* показать узел: папку открыть, файл выбрать в его папке */
 void files_init(void);                                /* открыть домашнюю папку */
 
 /* x, y - левый верхний угол области содержимого. */

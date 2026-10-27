@@ -47,6 +47,35 @@ void ui_switch(i32 x, i32 y, int on)
     fb_fill_circle(kx, y + 12, 10, RGB(255, 255, 255));
 }
 
+/* Ползунок 0..100: дорожка шириной w, центр по вертикали y; активна ли - от этого зависит цвет. */
+void ui_slider(i32 x, i32 y, i32 w, int v, int enabled)
+{
+    int dark = theme_is_dark();
+    u32 track = dark ? RGB(88, 88, 96) : RGB(214, 214, 219);
+    fb_fill_round_rect(x, y - 2, w, 5, 2, track, 255);
+    i32 kx = x + (w - 20) * v / 100 + 10;
+    fb_fill_round_rect(x, y - 2, kx - x, 5, 2, enabled ? theme_accent() : (dark ? RGB(130, 130, 138) : RGB(176, 176, 182)), 255);
+    fb_fill_circle(kx, y + 1, 10, dark ? RGB(40, 40, 46) : RGB(176, 176, 182));
+    fb_fill_circle(kx, y, 10, RGB(255, 255, 255));
+}
+
+/* Переключатель из n вариантов: выбранный выделен "таблеткой". Высота 24. */
+void ui_segment(i32 x, i32 y, i32 w, const char *const *labels, int n, int sel)
+{
+    int dark = theme_is_dark();
+    fb_fill_round_rect(x, y, w, 24, 7, dark ? RGB(70, 70, 78) : RGB(226, 226, 231), 255);
+    i32 sw = w / n;
+    for (int i = 0; i < n; i++) {
+        i32 sx = x + i * sw;
+        if (i == sel) {
+            fb_fill_round_rect(sx + 2, y + 2, sw - 4, 21, 6, RGB(0, 0, 0), dark ? 90 : 26);
+            fb_fill_round_rect(sx + 2, y + 2, sw - 4, 20, 6, dark ? RGB(110, 110, 120) : RGB(255, 255, 255), 255);
+        }
+        i32 tw = font_width(labels[i], FONT_REGULAR);
+        font_draw(sx + (sw - tw) / 2, y + 4, labels[i], theme()->text, FONT_REGULAR);
+    }
+}
+
 void ui_glyph(int kind, i32 cx, i32 cy, u32 c, u32 cut)
 {
     switch (kind) {

@@ -27,7 +27,7 @@ ISO    := $(BUILD)/endixos.iso
 # (выйти из захвата: Ctrl+Alt+G). Часы показывают местное время.
 QEMU      := qemu-system-i386
 QEMU_OPTS := -m 128 -serial stdio -rtc base=localtime \
-             -display gtk,grab-on-hover=on -accel kvm -accel tcg
+             -nic user,model=e1000 -display gtk,grab-on-hover=on -accel kvm -accel tcg
 
 .PHONY: all run iso check clean
 
@@ -56,8 +56,14 @@ iso: $(KERNEL)
 	cp grub.cfg $(BUILD)/iso/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) $(BUILD)/iso
 
-run: iso
-	$(QEMU) -cdrom $(ISO) $(QEMU_OPTS)
+DISK := disk.img
+
+# Виртуальный диск для сохранения настроек (лежит рядом с проектом: создаётся один раз и не стирается make clean)
+$(DISK):
+	dd if=/dev/zero of=$@ bs=512 count=2048 2>/dev/null
+
+run: iso $(DISK)
+	$(QEMU) -cdrom $(ISO) -boot d -drive file=$(DISK),format=raw,if=ide,index=0 $(QEMU_OPTS)
 
 clean:
 	rm -rf $(BUILD)

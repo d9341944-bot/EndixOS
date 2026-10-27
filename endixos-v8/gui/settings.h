@@ -11,7 +11,10 @@ void settings_set_wallpaper(int id);                /* меняет обои н�
 int  settings_wallpaper(void);
 
 void settings_draw(i32 x, i32 y, i32 w, i32 h);
-int  settings_click(i32 rx, i32 ry);                /* 1, если что-то изменилось */
+int  settings_click(i32 rx, i32 ry);
+int  settings_dragging(void);                       /* тянут ползунок */
+void settings_drag(i32 rx);
+void settings_release(void);                /* 1, если что-то изменилось */
 
 /* Панель "О системе", общая для окна About и страницы About в Settings. */
 void about_draw(i32 x, i32 y);
@@ -20,5 +23,9 @@ void about_draw(i32 x, i32 y);
 void about_window_draw(i32 x, i32 y, i32 w, i32 h);
 int  about_window_click(i32 rx, i32 ry, i32 w);
 void settings_show_about(void);
+void settings_show_page(int p);     /* 0 Wallpaper, 1 Appearance, 2 Liquid Glass */
+
+
+#define ENDIX_VERSION "8.0"
 
 #endif

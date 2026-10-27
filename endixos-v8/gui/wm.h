@@ -29,7 +29,7 @@ int  wm_frame(u32 ticks);
 void wm_invalidate(void);
 
 /* Настройки оболочки (Settings > Appearance). */
-enum { WM_OPT_DOCK_MAGNIFY, WM_OPT_CLOCK24 };
+enum { WM_OPT_DOCK_MAGNIFY, WM_OPT_CLOCK24, WM_OPT_REDUCE_TRANSP, WM_OPT_DOCK_ZOOM, WM_OPT_DOCK_HIDE };
 int  wm_get_option(int id);
 void wm_set_option(int id, int v);
 

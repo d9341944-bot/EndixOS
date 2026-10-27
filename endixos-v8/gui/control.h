@@ -10,9 +10,12 @@ void cc_draw(i32 screen_w);               /* панель, если открыт
 void cc_toggle(void);
 void cc_close(void);
 int  cc_is_open(void);
+void cc_draw_search_icon(i32 x, i32 y, u32 ink);   /* лупа 16x16 с левым верхним углом (x, y) */
 int  cc_hit(i32 screen_w, i32 x, i32 y);  /* курсор внутри панели */
 void cc_press(i32 screen_w, i32 x, i32 y);
 int  cc_dragging(void);
+void cc_draw_any(i32 screen_w);
+void cc_bounds(i32 screen_w, i32 *x, i32 *y, i32 *w, i32 *h);
 void cc_drag(i32 screen_w, i32 x);
 void cc_release(void);
 int  cc_brightness(void);                 /* 20..100 */

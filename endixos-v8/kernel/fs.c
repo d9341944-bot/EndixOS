@@ -482,6 +482,6 @@ void fs_init(void)
         "[ ] Launchpad\n"
         "[ ] real disk\n");
     put_file(desktop, "hello.txt", "Hello from EndixOS!\n");
-    put_file(etc, "os-release", "NAME=EndixOS\nVERSION=8.0 alpha 4\nARCH=i686\n");
+    put_file(etc, "os-release", "NAME=EndixOS\nVERSION=8.0\nARCH=i686\n");
     put_file(etc, "hostname", "endix\n");
 }

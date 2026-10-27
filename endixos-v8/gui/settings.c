@@ -1,5 +1,6 @@
 /* Приложение Settings: боковое меню, страницы Wallpapers / Themes / About. */
 #include "settings.h"
+#include "icons.h"
 #include "fb.h"
 #include "font.h"
 #include "theme.h"
@@ -15,10 +16,9 @@
 #define CARD_W 150
 #define CARD_H 100
 
-enum { PAGE_WALL, PAGE_THEMES, PAGE_ABOUT, PAGE_COUNT };
+enum { PAGE_WALL, PAGE_THEMES, PAGE_GLASS, PAGE_ABOUT, PAGE_COUNT };
 
-static const char *const page_name[PAGE_COUNT] = { "Wallpaper", "Appearance", "About" };
-static const u32 page_icon[PAGE_COUNT] = { RGB(52, 120, 246), RGB(96, 98, 108), RGB(110, 115, 125) };
+static const char *const page_name[PAGE_COUNT] = { "Wallpaper", "Appearance", "Liquid Glass", "About" };
 
 static const sysinfo_t *si;
 static int page = PAGE_WALL;
@@ -41,8 +41,14 @@ static void card_pos(int i, i32 *x, i32 *y)
 
 #define GRP_X (SIDEBAR_W + 24)
 #define GRP_W 422
-#define GRP_Y 232
-#define ROW_H 44
+#define GRP_Y 216
+#define ROW_H 42
+#define HIDE_W 170
+#define HIDE_X (GRP_X + GRP_W - 16 - HIDE_W)
+#define SL_W  170
+#define SL_X  (GRP_X + GRP_W - 16 - SL_W)
+
+static int sl_drag;                     /* какой ползунок тянут: 1 - зум Dock, 2.. - параметры Liquid Glass */
 
 static void accent_pos(int i, i32 *cx, i32 *cy)
 {
@@ -114,7 +120,7 @@ void about_draw(i32 x, i32 y)
     logo_draw(x + 28, y + 30, 72, theme_accent());
 
     font_draw(x + 124, y + 26, "EndixOS", t->text, FONT_TITLE);
-    font_draw(x + 125, y + 62, "Version 8.0 alpha 12", t->sub, FONT_REGULAR);
+    font_draw(x + 125, y + 62, "Version " ENDIX_VERSION, t->sub, FONT_REGULAR);
 
     i32 ry = y + 118;
     about_row(x + 28, ry, "Processor", si ? si->cpu : "?");
@@ -193,8 +199,8 @@ static void draw_themes(i32 x, i32 y)
         draw_card(x + cx, y + cy, i, theme_is_dark() == i, i ? "Dark" : "Light");
     }
 
-    ui_group(x + GRP_X, y + GRP_Y, GRP_W, ROW_H * 3);
-    font_draw(x + GRP_X + 16, y + GRP_Y + 13, "Accent color", t->text, FONT_REGULAR);
+    ui_group(x + GRP_X, y + GRP_Y, GRP_W, ROW_H * 6);
+    font_draw(x + GRP_X + 16, y + GRP_Y + 12, "Accent color", t->text, FONT_REGULAR);
     for (int i = 0; i < ACCENT_COUNT; i++) {
         i32 cx, cy;
         accent_pos(i, &cx, &cy);
@@ -208,10 +214,65 @@ static void draw_themes(i32 x, i32 y)
     }
     ui_hline(x + GRP_X + 16, y + GRP_Y + ROW_H, GRP_W - 16);
     font_draw(x + GRP_X + 16, y + GRP_Y + ROW_H + 13, "Dock magnification", t->text, FONT_REGULAR);
-    ui_switch(x + GRP_X + GRP_W - 52, y + GRP_Y + ROW_H + 10, wm_get_option(WM_OPT_DOCK_MAGNIFY));
+    ui_switch(x + GRP_X + GRP_W - 52, y + GRP_Y + ROW_H + 9, wm_get_option(WM_OPT_DOCK_MAGNIFY));
     ui_hline(x + GRP_X + 16, y + GRP_Y + 2 * ROW_H, GRP_W - 16);
-    font_draw(x + GRP_X + 16, y + GRP_Y + 2 * ROW_H + 13, "24-hour time", t->text, FONT_REGULAR);
-    ui_switch(x + GRP_X + GRP_W - 52, y + GRP_Y + 2 * ROW_H + 10, wm_get_option(WM_OPT_CLOCK24));
+    font_draw(x + GRP_X + 16, y + GRP_Y + 2 * ROW_H + 13, "Magnification size", wm_get_option(WM_OPT_DOCK_MAGNIFY) ? t->text : t->sub, FONT_REGULAR);
+    ui_slider(x + SL_X, y + GRP_Y + 2 * ROW_H + ROW_H / 2, SL_W, wm_get_option(WM_OPT_DOCK_ZOOM), wm_get_option(WM_OPT_DOCK_MAGNIFY));
+    ui_hline(x + GRP_X + 16, y + GRP_Y + 3 * ROW_H, GRP_W - 16);
+    font_draw(x + GRP_X + 16, y + GRP_Y + 3 * ROW_H + 13, "Dock hiding", t->text, FONT_REGULAR);
+    {
+        static const char *const hide_labels[3] = { "Off", "Auto", "Smart" };
+        ui_segment(x + HIDE_X, y + GRP_Y + 3 * ROW_H + 9, HIDE_W, hide_labels, 3, wm_get_option(WM_OPT_DOCK_HIDE));
+    }
+    ui_hline(x + GRP_X + 16, y + GRP_Y + 4 * ROW_H, GRP_W - 16);
+    font_draw(x + GRP_X + 16, y + GRP_Y + 4 * ROW_H + 13, "24-hour time", t->text, FONT_REGULAR);
+    ui_switch(x + GRP_X + GRP_W - 52, y + GRP_Y + 4 * ROW_H + 9, wm_get_option(WM_OPT_CLOCK24));
+    ui_hline(x + GRP_X + 16, y + GRP_Y + 5 * ROW_H, GRP_W - 16);
+    font_draw(x + GRP_X + 16, y + GRP_Y + 5 * ROW_H + 12, "Reduce transparency", t->text, FONT_REGULAR);
+    ui_switch(x + GRP_X + GRP_W - 52, y + GRP_Y + 5 * ROW_H + 9, wm_get_option(WM_OPT_REDUCE_TRANSP));
+}
+
+/* ---------- Liquid Glass ---------- */
+
+static const char *const glass_label[GLASS_PARAMS] = { "Refraction", "Blur", "Frost", "Edge light", "Vibrancy" };
+#define PV_Y 84
+#define PV_H 116
+#define RST_Y (GRP_Y + GLASS_PARAMS * ROW_H + 12)
+
+static void draw_glass(i32 x, i32 y)
+{
+    const theme_t *t = theme();
+    heading(x, y, "Liquid Glass", "Adjust the glass of the Dock, menus and panels");
+
+    /* образец: яркий фон с крупными фигурами и стеклянная панель поверх */
+    i32 px = x + GRP_X, py = y + PV_Y;
+    for (i32 i = 0; i < GRP_W; i++) {
+        u32 r = (u32)(70 + i * 150 / GRP_W), g = (u32)(60 + (GRP_W - i) * 60 / GRP_W), b = (u32)(220 - i * 90 / GRP_W);
+        fb_fill_rect(px + i, py, 1, PV_H, RGB(r, g, b));
+    }
+    fb_fill_circle(px + 66, py + 40, 34, RGB(255, 214, 80));
+    fb_fill_circle(px + 350, py + 78, 40, RGB(60, 224, 230));
+    fb_fill_circle(px + 230, py + 30, 22, RGB(255, 255, 255));
+    fb_fill_rect(px + 120, py + 12, 14, PV_H - 24, RGB(255, 90, 140));
+    fb_fill_rect(px + 300, py + 8, 10, PV_H - 16, RGB(20, 20, 40));
+    fb_glass(px + 56, py + 26, GRP_W - 112, 64, 24, GLASS_ALL, 10, theme_is_dark() ? RGB(36, 36, 42) : RGB(238, 238, 243),
+             theme_is_dark() ? 105 : 120, 30);
+    {
+        const char *cap = "Liquid Glass";
+        font_draw(px + GRP_W / 2 - font_width(cap, FONT_BOLD) / 2, py + 26 + 22, cap, theme_is_dark() ? RGB(245, 245, 248) : RGB(30, 30, 34), FONT_BOLD);
+    }
+
+    ui_group(x + GRP_X, y + GRP_Y, GRP_W, ROW_H * GLASS_PARAMS);
+    for (int i = 0; i < GLASS_PARAMS; i++) {
+        i32 ry = y + GRP_Y + i * ROW_H;
+        if (i) ui_hline(x + GRP_X + 16, ry, GRP_W - 16);
+        font_draw(x + GRP_X + 16, ry + 13, glass_label[i], t->text, FONT_REGULAR);
+        char buf[8];
+        put_u32(buf, (u32)fb_glass_param_get(i));
+        font_draw(x + SL_X - 40, ry + 13, buf, t->sub, FONT_REGULAR);
+        ui_slider(x + SL_X, ry + ROW_H / 2, SL_W, fb_glass_param_get(i), 1);
+    }
+    ui_button(x + GRP_X, y + RST_Y, 120, 28, "Reset", 1, 0);
 }
 
 /* ---------- окно целиком ---------- */
@@ -221,11 +282,7 @@ void settings_draw(i32 x, i32 y, i32 w, i32 h)
     const theme_t *t = theme();
     (void)w;
 
-    /* боковая панель: левый нижний угол повторяет скругление окна */
-    fb_fill_round_rect(x, y + h - 2 * WIN_RADIUS, SIDEBAR_W + WIN_RADIUS, 2 * WIN_RADIUS,
-                       WIN_RADIUS, t->side, 255);
-    fb_fill_rect(x + SIDEBAR_W, y + h - 2 * WIN_RADIUS, WIN_RADIUS, 2 * WIN_RADIUS, t->body);
-    fb_fill_rect(x, y, SIDEBAR_W, h - WIN_RADIUS, t->side);
+    /* фон боковой панели - стекло, его рисует оболочка окон */
     fb_blend_rect(x + SIDEBAR_W - 1, y, 1, h, RGB(0, 0, 0), t->line_alpha);
 
     /* учётная запись */
@@ -243,7 +300,7 @@ void settings_draw(i32 x, i32 y, i32 w, i32 h)
             fb_fill_round_rect(ix + 6, iy + 4, 20, 20, 6, sel ? RGB(255, 255, 255) : theme_accent(), 255);
             logo_draw(ix + 9, iy + 7, 14, sel ? theme_accent() : RGB(255, 255, 255));
         } else {
-            ui_squircle_icon(i == PAGE_WALL ? G_PHOTO : G_APPEAR, ix + 6, iy + 4, 20, page_icon[i]);
+            icon_draw(i == PAGE_WALL ? ICON_TILE_WALL : i == PAGE_GLASS ? ICON_TILE_GLASS : ICON_TILE_APPEAR, ix + 6, iy + 4, 20);
         }
         font_draw(ix + 36, iy + 5, page_name[i], sel ? RGB(255, 255, 255) : t->text, FONT_REGULAR);
     }
@@ -251,6 +308,7 @@ void settings_draw(i32 x, i32 y, i32 w, i32 h)
     switch (page) {
     case PAGE_WALL:   draw_wallpapers(x, y); break;
     case PAGE_THEMES: draw_themes(x, y);     break;
+    case PAGE_GLASS:  draw_glass(x, y);      break;
     case PAGE_ABOUT:  about_draw(x + SIDEBAR_W, y); break;
     }
 }
@@ -273,6 +331,17 @@ int settings_click(i32 rx, i32 ry)
                 return 1;
             }
         }
+    } else if (page == PAGE_GLASS) {
+        for (int i = 0; i < GLASS_PARAMS; i++)
+            if (in_rect(rx, ry, SL_X - 12, GRP_Y + i * ROW_H, SL_W + 24, ROW_H)) {
+                sl_drag = 2 + i;
+                settings_drag(rx);
+                return 1;
+            }
+        if (in_rect(rx, ry, GRP_X, RST_Y, 120, 28)) {
+            fb_glass_param_reset();
+            return 1;
+        }
     } else if (page == PAGE_THEMES) {
         for (int i = 0; i < 2; i++) {
             i32 cx, cy;
@@ -286,7 +355,21 @@ int settings_click(i32 rx, i32 ry)
             wm_set_option(WM_OPT_DOCK_MAGNIFY, !wm_get_option(WM_OPT_DOCK_MAGNIFY));
             return 1;
         }
-        if (in_rect(rx, ry, GRP_X, GRP_Y + 2 * ROW_H, GRP_W, ROW_H)) {
+        if (in_rect(rx, ry, SL_X - 12, GRP_Y + 2 * ROW_H, SL_W + 24, ROW_H)) {
+            sl_drag = 1;
+            settings_drag(rx);
+            return 1;
+        }
+        if (in_rect(rx, ry, GRP_X, GRP_Y + 5 * ROW_H, GRP_W, ROW_H)) {
+            wm_set_option(WM_OPT_REDUCE_TRANSP, !wm_get_option(WM_OPT_REDUCE_TRANSP));
+            return 1;
+        }
+        if (in_rect(rx, ry, HIDE_X, GRP_Y + 3 * ROW_H, HIDE_W, ROW_H)) {      /* Dock hiding: Off / Auto / Smart */
+            int k = (rx - HIDE_X) * 3 / HIDE_W;
+            wm_set_option(WM_OPT_DOCK_HIDE, k < 0 ? 0 : (k > 2 ? 2 : k));
+            return 1;
+        }
+        if (in_rect(rx, ry, GRP_X, GRP_Y + 4 * ROW_H, GRP_W, ROW_H)) {
             wm_set_option(WM_OPT_CLOCK24, !wm_get_option(WM_OPT_CLOCK24));
             return 1;
         }
@@ -309,6 +392,7 @@ int settings_click(i32 rx, i32 ry)
 #define AB_BTN_Y 392
 
 void settings_show_about(void) { page = PAGE_ABOUT; }
+void settings_show_page(int p) { page = p == 1 ? PAGE_THEMES : p == 2 ? PAGE_GLASS : PAGE_WALL; }
 
 static void ab_row(i32 mid, i32 y, const char *label, const char *value, i32 maxw)
 {
@@ -350,7 +434,7 @@ void about_window_draw(i32 x, i32 y, i32 w, i32 h)
     fb_fill_round_rect(cx - 22, ly + 84, 44, 3, 1, RGB(160, 161, 168), 255);
 
     ab_center(cx, y + 150, "EndixOS PC", t->text, FONT_TITLE);
-    ab_center(cx, y + 190, "Version 8.0 alpha 12, 2026", t->sub, FONT_REGULAR);
+    ab_center(cx, y + 190, "Version " ENDIX_VERSION ", 2026", t->sub, FONT_REGULAR);
 
     i32 mid = cx - 14, ry = y + 232, maxw = x + w - 10 - mid;
     char buf[40];
@@ -364,7 +448,7 @@ void about_window_draw(i32 x, i32 y, i32 w, i32 h)
     p = put_str(p, " x ");
     put_u32(p, si ? si->height : 0);
     ab_row(mid, ry + 78, "Display", buf, maxw);
-    ab_row(mid, ry + 104, "EndixOS", "8.0 alpha 12", maxw);
+    ab_row(mid, ry + 104, "EndixOS", ENDIX_VERSION, maxw);
 
     i32 bx = cx - AB_BTN_W / 2, by = y + AB_BTN_Y;
     fb_fill_round_rect(bx, by, AB_BTN_W, AB_BTN_H, 9, theme_is_dark() ? RGB(80, 80, 88) : RGB(232, 232, 236), 255);
@@ -383,3 +467,16 @@ int about_window_click(i32 rx, i32 ry, i32 w)
     }
     return 0;
 }
+
+/* Ползунок размера увеличения Dock: rx - координата мыши относительно содержимого окна. */
+int settings_dragging(void) { return sl_drag; }
+
+void settings_drag(i32 rx)
+{
+    i32 v = (rx - SL_X - 10) * 100 / (SL_W - 20);
+    v = v < 0 ? 0 : (v > 100 ? 100 : v);
+    if (sl_drag >= 2) fb_glass_param_set(sl_drag - 2, v);
+    else wm_set_option(WM_OPT_DOCK_ZOOM, v);
+}
+
+void settings_release(void) { sl_drag = 0; }

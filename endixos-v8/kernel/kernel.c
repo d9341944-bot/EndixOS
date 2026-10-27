@@ -1,4 +1,8 @@
 /* EndixOS v8 - ядро, точка входа на C. */
+#include "../drivers/ata.h"
+#include "../drivers/e1000.h"
+#include "net.h"
+#include "../gui/prefs.h"
 #include "types.h"
 #include "multiboot.h"
 #include "io.h"
@@ -95,6 +99,9 @@ void kernel_main(u32 magic, multiboot_info_t *mbi)
 
     wm_init(&info);
     update_time();
+    if (ata_init()) prefs_init(ata_read, ata_write);      /* сохранённые настройки с виртуального диска */
+
+    if (e1000_init()) { u8 mac[6]; e1000_mac(mac); net_init(mac, e1000_send); }   /* сеть: DHCP стартует сам */
 
     ps2_set_bounds(info.width, info.height);
     pit_init();
@@ -124,6 +131,9 @@ void kernel_main(u32 magic, multiboot_info_t *mbi)
                 dirty = 1;
         }
 
+        e1000_poll(net_rx);
+        net_tick(now);
+        prefs_tick(now);
         if (wm_tick(now))
             dirty = 1;
 

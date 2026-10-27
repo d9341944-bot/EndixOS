@@ -34,6 +34,17 @@ void fb_flip(void);                      /* выводит кадр, запис�
 /* Курсор рисуется прямо в видеопамять после fb_flip и двигается без перерисовки сцены. */
 void fb_frame_put_pixel(i32 x, i32 y, u32 color);
 void fb_frame_restore(i32 x, i32 y, i32 w, i32 h);
-u32  fb_flipped_bytes(void);             /* сколько байт записано в видеопамять всего */
+u32  fb_flipped_bytes(void);
+
+/* Liquid glass: размытие фона, тонировка (tint, ta 0..255), блик sheen и световая кромка.
+ * corners: какие углы скруглять (1 лв, 2 пв, 4 лн, 8 пн; 15 - все). br - радиус размытия (0 - без размытия). */
+#define GLASS_ALL 15
+void fb_shadow(i32 x, i32 y, i32 w, i32 h, i32 dy, i32 spread, u32 amax);   /* тень окна (чёрная, amax 0..255) */
+enum { GLASS_REFRACT, GLASS_BLUR, GLASS_FROST, GLASS_EDGE, GLASS_VIVID, GLASS_PARAMS };
+void fb_glass_param_set(int id, int v);   /* настройки Liquid Glass, 0..100 */
+int  fb_glass_param_get(int id);
+void fb_glass_param_reset(void);
+void fb_glass_set_reduced(int on);        /* без размытия и плотнее - быстрее и контрастнее */
+void fb_glass(i32 x, i32 y, i32 w, i32 h, i32 r, u32 corners, i32 br, u32 tint, u32 ta, u32 sheen);             /* сколько байт записано в видеопамять всего */
 
 #endif

@@ -1,5 +1,6 @@
 /* Приложение Files: просмотр и правка файловой системы в памяти. */
 #include "files.h"
+#include "icons.h"
 #include "fb.h"
 #include "ui.h"
 #include "font.h"
@@ -21,6 +22,7 @@
 
 /* ---------- состояние ---------- */
 
+static i32  fw_ = 720, fh_ = 416;     /* текущий размер области содержимого окна */
 static int  cur = -1;                  /* открытая папка */
 static int  sel = -1;                  /* выбранный узел */
 static int  scroll;                    /* первая видимая строка сетки */
@@ -44,7 +46,7 @@ static const struct { const char *label; const char *path; u32 color; } side[] =
     { "EndixOS",   "/",           RGB(110, 115, 125) },
 };
 #define NSIDE ((int)(sizeof(side) / sizeof(side[0])))
-static const u8 side_glyph[] = { G_HOME, G_DESKTOP, G_DOC, G_DOWN, G_PHOTO, G_MUSIC, G_DISK };
+static const u8 side_glyph[] = { ICON_SIDE_HOME, ICON_SIDE_DESKTOP, ICON_SIDE_DOC, ICON_SIDE_DOWN, ICON_SIDE_PHOTO, ICON_SIDE_MUSIC, ICON_SIDE_DISK };
 #define SIDE_LOCATIONS 6           /* с этого пункта начинается раздел Locations */
 
 /* ---------- строки ---------- */
@@ -135,10 +137,10 @@ static const char *kind_of(int node)
 
 /* ---------- геометрия ---------- */
 
-#define MAIN_W (FILES_W - SIDE_W - PREV_W)
+#define MAIN_W (fw_ - SIDE_W - PREV_W)
 
-static int ncols(void) { return MAIN_W / CELL_W; }
-static int nrows(void) { return (FILES_H - TOOL_H - ACT_H - STATUS_H - 8) / CELL_H; }
+static int ncols(void) { int c = MAIN_W / CELL_W; return c < 1 ? 1 : c; }
+static int nrows(void) { int r = (fh_ - TOOL_H - ACT_H - STATUS_H - 8) / CELL_H; return r < 1 ? 1 : r; }
 static i32 grid_x(void) { return SIDE_W + (MAIN_W - ncols() * CELL_W) / 2; }
 static i32 grid_y(void) { return TOOL_H + ACT_H + 6; }
 
@@ -366,12 +368,8 @@ static void draw_sidebar(i32 x, i32 y)
 {
     const theme_t *t = theme();
 
-    /* фон боковой панели; нижний левый угол повторяет скругление окна */
-    fb_fill_round_rect(x, y + FILES_H - 2 * WIN_RADIUS, SIDE_W + WIN_RADIUS, 2 * WIN_RADIUS,
-                       WIN_RADIUS, t->side, 255);
-    fb_fill_rect(x + SIDE_W, y + FILES_H - 2 * WIN_RADIUS, WIN_RADIUS, 2 * WIN_RADIUS, t->body);
-    fb_fill_rect(x, y, SIDE_W, FILES_H - WIN_RADIUS, t->side);
-    fb_blend_rect(x + SIDE_W - 1, y, 1, FILES_H, RGB(0, 0, 0), t->line_alpha);
+    /* фон боковой панели - стекло, его рисует оболочка окон */
+    fb_blend_rect(x + SIDE_W - 1, y, 1, fh_, RGB(0, 0, 0), t->line_alpha);
 
     font_draw(x + 18, y + 12, "Favorites", t->sub, FONT_BOLD);
     for (int i = 0; i < NSIDE; i++) {
@@ -385,7 +383,7 @@ static void draw_sidebar(i32 x, i32 y)
         if (active)
             fb_fill_round_rect(ix, iy, SIDE_W - 20, 26, 7, theme_is_dark() ? RGB(255, 255, 255) : RGB(0, 0, 0),
                                theme_is_dark() ? 30 : 22);
-        ui_glyph(side_glyph[i], ix + 16, iy + 13, theme_accent(), t->side);
+        icon_draw(side_glyph[i], ix + 6, iy + 3, 20);
         font_draw(ix + 32, iy + 4, side[i].label, node >= 0 ? t->text : t->sub, FONT_REGULAR);
     }
 }
@@ -476,7 +474,7 @@ static void draw_status(i32 x, i32 y)
 {
     const theme_t *t = theme();
     char buf[64], *p;
-    i32 sy = y + FILES_H - STATUS_H;
+    i32 sy = y + fh_ - STATUS_H;
 
     fb_blend_rect(x + SIDE_W, sy, MAIN_W, 1, RGB(0, 0, 0), t->line_alpha);
     if (msg[0]) {
@@ -493,15 +491,15 @@ static void draw_status(i32 x, i32 y)
 static void draw_preview(i32 x, i32 y)
 {
     const theme_t *t = theme();
-    i32 px = x + FILES_W - PREV_W;
+    i32 px = x + fw_ - PREV_W;
     char buf[64], *p;
 
     /* фон панели; нижний правый угол повторяет скругление окна */
-    fb_fill_round_rect(px - WIN_RADIUS, y + FILES_H - 2 * WIN_RADIUS, PREV_W + WIN_RADIUS,
+    fb_fill_round_rect(px - WIN_RADIUS, y + fh_ - 2 * WIN_RADIUS, PREV_W + WIN_RADIUS,
                        2 * WIN_RADIUS, WIN_RADIUS, t->side, 255);
-    fb_fill_rect(px - WIN_RADIUS, y + FILES_H - 2 * WIN_RADIUS, WIN_RADIUS, 2 * WIN_RADIUS, t->body);
-    fb_fill_rect(px, y, PREV_W, FILES_H - WIN_RADIUS, t->side);
-    fb_blend_rect(px, y, 1, FILES_H, RGB(0, 0, 0), t->line_alpha);
+    fb_fill_rect(px - WIN_RADIUS, y + fh_ - 2 * WIN_RADIUS, WIN_RADIUS, 2 * WIN_RADIUS, t->body);
+    fb_fill_rect(px, y, PREV_W, fh_ - WIN_RADIUS, t->side);
+    fb_blend_rect(px, y, 1, fh_, RGB(0, 0, 0), t->line_alpha);
 
     int node = sel >= 0 ? sel : cur;
     int is_dir = fs_is_dir(node);
@@ -566,6 +564,15 @@ void files_draw(i32 x, i32 y)
 
 /* ---------- ввод ---------- */
 
+void files_goto(int node)
+{
+    if (!fs_valid(node)) return;
+    int d = fs_is_dir(node) ? node : fs_parent(node);
+    if (d < 0) return;
+    if (d != cur) go(d);
+    sel = fs_is_dir(node) ? -1 : node;
+}
+
 void files_init(void)
 {
     cur = fs_home();
@@ -628,7 +635,7 @@ int files_click(i32 rx, i32 ry, u32 ticks)
         return 0;
     }
 
-    if (rx >= FILES_W - PREV_W || ry >= FILES_H - STATUS_H)
+    if (rx >= fw_ - PREV_W || ry >= fh_ - STATUS_H)
         return 0;
 
     /* сетка файлов */
@@ -715,3 +722,16 @@ int files_key(i32 key)
 }
 
 void files_new_folder(void) { make_new(1); }
+
+/* Окно изменило размер: подгоняем сетку и прокрутку. */
+void files_set_size(i32 w, i32 h)
+{
+    fw_ = w;
+    fh_ = h;
+    int cols = ncols(), rows = nrows();
+    if (cols < 1)
+        return;
+    int total = (nitems + cols - 1) / cols;
+    if (scroll > total - rows)
+        scroll = total - rows > 0 ? total - rows : 0;
+}
