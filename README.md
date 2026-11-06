@@ -1,4 +1,4 @@
-# EndixOS 8.0
+# EndixOS 8.1 beta
 
 An operating system written from scratch: its own 32-bit x86 kernel in C and assembly, and a graphical desktop in the style of macOS (Liquid Glass). No Linux, no libc, no third-party libraries.
 
