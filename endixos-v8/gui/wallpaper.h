@@ -3,7 +3,9 @@
 
 #include "../kernel/types.h"
 
-#define WALL_COUNT 12
+#define WALL_COUNT 12                 /* процедурные обои */
+#define WALL_RENDERED 5               /* встроенные 3D-сцены: id = WALL_COUNT + k */
+#define WALL_PHOTO0 (WALL_COUNT + WALL_RENDERED)   /* фотографии пользователя: id = WALL_PHOTO0 + k */
 
 const char *wallpaper_name(int id);
 

@@ -4,6 +4,8 @@
 
 static u8  *screen;                                /* видеопамять */
 static u32  s_pitch, s_width, s_height;
+static u32  s_phys_w;                              /* физическая ширина; s_width - логическая (шире, если экран растягивает 4:3 на широкую матрицу) */
+static u16  wx_lo[FB_MAX_W], wx_hi[FB_MAX_W], wx_wl[FB_MAX_W], wx_wh[FB_MAX_W]; static u32 wx_inv[FB_MAX_W];
 static u32  backbuf[FB_MAX_W * FB_MAX_H];          /* теневой буфер (bss) */
 static u32  flipped_bytes;                         /* счётчик записей в видеопамять (для замеров) */
 static u32  bgbuf[FB_MAX_W * FB_MAX_H];            /* кэш обоев */
@@ -16,7 +18,46 @@ int fb_init(u32 addr, u32 pitch, u32 width, u32 height, u32 bpp)
     s_pitch  = pitch;
     s_width  = width;
     s_height = height;
+    s_phys_w = width;
     return 0;
+}
+
+/* Рисуем в логическую ширину lw, а на экран (физическая ширина) сжимаем усреднением. Нужно для нетбуков:
+ * BIOS отдаёт 800x600, панель растягивает до 1024x600, и сжатая заранее картинка выглядит пропорционально. */
+int fb_set_logical_width(u32 lw)
+{
+    if (lw <= s_phys_w || lw > FB_MAX_W || s_phys_w == 0) return -1;
+    for (u32 dx = 0; dx < s_phys_w; dx++) {
+        u32 a = dx * lw * 256 / s_phys_w, b = (dx + 1) * lw * 256 / s_phys_w;     /* границы в 1/256 пикселя */
+        u32 lo = a >> 8, hi = (b - 1) >> 8;
+        wx_lo[dx] = (u16)lo; wx_hi[dx] = (u16)hi;
+        if (lo == hi) { wx_wl[dx] = (u16)(b - a); wx_wh[dx] = 0; }
+        else { wx_wl[dx] = (u16)(256 - (a & 255)); wx_wh[dx] = (u16)(((b - 1) & 255) + 1); }
+        wx_inv[dx] = (1u << 22) / (b - a);
+    }
+    s_width = lw;
+    return 0;
+}
+
+u32 fb_phys_width(void) { return s_phys_w; }
+
+/* Сжимает строки y0..y1 и физические столбцы px0..px1 из backbuf на экран. */
+static void scale_out(u32 y0, u32 y1, u32 px0, u32 px1)
+{
+    for (u32 y = y0; y < y1; y++) {
+        const u32 *src = &backbuf[y * s_width];
+        u32 *dst = (u32 *)(screen + y * s_pitch);
+        for (u32 dx = px0; dx < px1; dx++) {
+            u32 lo = wx_lo[dx], hi = wx_hi[dx], wl = wx_wl[dx];
+            u32 p = src[lo], r = ((p >> 16) & 255) * wl, g = ((p >> 8) & 255) * wl, b = (p & 255) * wl;
+            for (u32 k = lo + 1; k < hi; k++) { p = src[k]; r += ((p >> 16) & 255) << 8; g += ((p >> 8) & 255) << 8; b += (p & 255) << 8; }
+            if (hi > lo) { u32 wh = wx_wh[dx]; p = src[hi]; r += ((p >> 16) & 255) * wh; g += ((p >> 8) & 255) * wh; b += (p & 255) * wh; }
+            u32 inv = wx_inv[dx];
+            r = (r * inv) >> 22; g = (g * inv) >> 22; b = (b * inv) >> 22;
+            dst[dx] = (r > 255 ? 255 : r) << 16 | (g > 255 ? 255 : g) << 8 | (b > 255 ? 255 : b);
+        }
+        flipped_bytes += (px1 - px0) * 4;
+    }
 }
 
 u32 fb_width(void)  { return s_width; }
@@ -153,6 +194,7 @@ void fb_frame_put_pixel(i32 x, i32 y, u32 color)
 {
     if (x < 0 || y < 0 || (u32)x >= s_width || (u32)y >= s_height)
         return;
+    if (s_phys_w != s_width) x = (i32)((u32)x * s_phys_w / s_width);
     *(u32 *)(screen + (u32)y * s_pitch + (u32)x * 4) = color;
 }
 
@@ -162,6 +204,14 @@ void fb_frame_restore(i32 x, i32 y, i32 w, i32 h)
     i32 x0 = x < 0 ? 0 : x, x1 = x + w > (i32)s_width ? (i32)s_width : x + w;
     if (x0 >= x1)
         return;
+    if (s_phys_w != s_width) {
+        i32 p0 = (i32)((u32)x0 * s_phys_w / s_width) - 1, p1 = (i32)((u32)x1 * s_phys_w / s_width) + 2;
+        if (p0 < 0) p0 = 0;
+        if (p1 > (i32)s_phys_w) p1 = (i32)s_phys_w;
+        i32 ya = y < 0 ? 0 : y, yb = y + h > (i32)s_height ? (i32)s_height : y + h;
+        if (ya < yb) scale_out((u32)ya, (u32)yb, (u32)p0, (u32)p1);
+        return;
+    }
     for (i32 j = y; j < y + h; j++) {
         if (j < 0 || (u32)j >= s_height)
             continue;
@@ -174,6 +224,7 @@ void fb_frame_restore(i32 x, i32 y, i32 w, i32 h)
 /* Сцена целиком на экран одним проходом. */
 void fb_flip(void)
 {
+    if (s_phys_w != s_width) { scale_out(0, s_height, 0, s_phys_w); return; }
     for (u32 y = 0; y < s_height; y++)
         memcpy(screen + y * s_pitch, &backbuf[y * s_width], s_width * 4);
     flipped_bytes += s_width * s_height * 4;

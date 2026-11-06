@@ -54,6 +54,12 @@ int  fs_move(int node, int new_parent, const char *new_name);   /* перено�
 /* Свободное имя в папке: "base", "base 2", "base 3"... (расширение сохраняется). */
 void fs_unique_name(int parent, const char *base, char *out);
 
+/* Корзина: ~/.Trash. Удалённое переносится туда с уникальным именем. */
+int  fs_trash(void);                                 /* узел корзины (создаётся заново, если её удалили) */
+int  fs_in_trash(int node);                          /* узел лежит внутри корзины */
+int  fs_trash_put(int node);                         /* 0 или код ошибки */
+int  fs_trash_empty(void);                           /* число удалённых элементов */
+
 u32  fs_used_bytes(void);
 
 #endif

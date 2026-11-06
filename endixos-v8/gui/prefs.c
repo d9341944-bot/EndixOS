@@ -4,7 +4,9 @@
 #include "theme.h"
 #include "settings.h"
 #include "widgets.h"
+#include "control.h"
 #include "wallpaper.h"
+#include "photos.h"
 
 #define MAGIC 0x58444E45u      /* "ENDX" */
 #define PVER 1
@@ -14,7 +16,9 @@ typedef struct {
     u8  ver, wall, dark, accent, magnify, zoom, hide, clock24, reduce;
     u8  glass[GLASS_PARAMS];
     u8  widgets;
-    u8  pad[512 - 4 - 9 - GLASS_PARAMS - 1];
+    u8  wpos[8];
+    u8  ccl[16];
+    u8  pad[512 - 4 - 9 - GLASS_PARAMS - 1 - 8 - 16];
 } blob_t;
 
 static prefs_rd_t rw_rd;
@@ -37,6 +41,8 @@ static void gather(blob_t *b)
     b->reduce = (u8)wm_get_option(WM_OPT_REDUCE_TRANSP);
     for (int i = 0; i < GLASS_PARAMS; i++) b->glass[i] = (u8)fb_glass_param_get(i);
     b->widgets = (u8)widgets_get_mask();
+    widgets_get_pos(b->wpos);
+    cc_get_layout(b->ccl);
 }
 
 static int same(const blob_t *a, const blob_t *b)
@@ -48,7 +54,7 @@ static int same(const blob_t *a, const blob_t *b)
 
 static void apply(const blob_t *b)
 {
-    if (b->wall < WALL_COUNT) settings_set_wallpaper(b->wall);
+    if (b->wall < WALL_PHOTO0 + PHOTO_MAX) settings_set_wallpaper(b->wall);
     theme_set_dark(b->dark ? 1 : 0);
     if (b->accent < ACCENT_COUNT) theme_set_accent(b->accent);
     wm_set_option(WM_OPT_DOCK_MAGNIFY, b->magnify);
@@ -58,6 +64,8 @@ static void apply(const blob_t *b)
     wm_set_option(WM_OPT_REDUCE_TRANSP, b->reduce);
     for (int i = 0; i < GLASS_PARAMS; i++) fb_glass_param_set(i, b->glass[i]);
     widgets_set_mask(b->widgets);
+    widgets_set_pos(b->wpos);
+    cc_set_layout(b->ccl);
 }
 
 void prefs_init(prefs_rd_t rd, prefs_wr_t wr)

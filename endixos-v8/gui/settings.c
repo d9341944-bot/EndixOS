@@ -7,23 +7,55 @@
 #include "logo.h"
 #include "ui.h"
 #include "wallpaper.h"
+#include "photos.h"
+#include "scenery.h"
+#include "resolution.h"
+#include "control.h"
+#include "../kernel/event.h"
 
 #define SIDEBAR_W 170
-#define SIDE_ITEMS_Y 72
-#define WIN_RADIUS 10
+#define SIDE_ITEMS_Y 100
+#define WIN_RADIUS 14
 #define THUMB_W 100
 #define THUMB_H 62
 #define CARD_W 150
 #define CARD_H 100
 
-enum { PAGE_WALL, PAGE_THEMES, PAGE_GLASS, PAGE_ABOUT, PAGE_COUNT };
+enum { PAGE_WALL, PAGE_PHOTOS, PAGE_THEMES, PAGE_GLASS, PAGE_DISPLAY, PAGE_SOUND, PAGE_ABOUT, PAGE_COUNT };
 
-static const char *const page_name[PAGE_COUNT] = { "Wallpaper", "Appearance", "Liquid Glass", "About" };
+static const char *const page_name[PAGE_COUNT] = { "Wallpaper", "Photos", "Appearance", "Liquid Glass", "Displays", "Sound", "About" };
+static const char *const page_keys[PAGE_COUNT] = {
+    "wallpaper background picture desktop", "photos pictures jpeg png own images wallpaper", "appearance dark light accent color dock clock 24 hour transparency magnification",
+    "liquid glass blur refraction frost", "displays brightness screen display", "sound volume audio", "about system info version memory" };
+
+/* поле Search в боковой панели */
+static char sq[24]; static int sqn, sq_focus;
+static int page_match(int i)
+{
+    if (!sqn) return 1;
+    const char *hay[2] = { page_name[i], page_keys[i] };
+    for (int h = 0; h < 2; h++)
+        for (const char *p = hay[h]; *p; p++) {
+            int k = 0;
+            while (k < sqn && p[k] && (p[k] | 32) == (sq[k] | 32)) k++;
+            if (k == sqn) return 1;
+        }
+    return 0;
+}
+static int vis_pages(int *out)                          /* страницы, подходящие под запрос, по порядку */
+{
+    int n = 0;
+    for (int i = 0; i < PAGE_COUNT; i++) if (page_match(i)) out[n++] = i;
+    return n;
+}
 
 static const sysinfo_t *si;
 static int page = PAGE_WALL;
 static int wall;
-static u32 thumbs[WALL_COUNT][THUMB_W * THUMB_H];
+static u32 thumbs[WALL_RENDERED][THUMB_W * THUMB_H];
+static u8  thumb_ok[WALL_RENDERED];
+static u32 pthumbs[PHOTO_MAX][THUMB_W * THUMB_H];
+static u8  pthumb_ok[PHOTO_MAX];            /* 0 - не пробовали, 1 - готова, 2 - не читается */
 
 /* ---------- геометрия (общая для рисования и кликов) ---------- */
 
@@ -65,7 +97,9 @@ static int in_rect(i32 px, i32 py, i32 x, i32 y, i32 w, i32 h)
 
 void settings_set_wallpaper(int id)
 {
-    if (id < 0 || id >= WALL_COUNT)
+    int okid = id >= 0 && (id < WALL_COUNT || (id < WALL_PHOTO0 && id - WALL_COUNT < scenery_count()) ||
+                           (id >= WALL_PHOTO0 && id - WALL_PHOTO0 < photos_count()));
+    if (!okid)
         return;
     wall = id;
     wallpaper_paint(id, fb_buffer(), fb_width(), fb_height());
@@ -80,9 +114,7 @@ int settings_wallpaper(void)
 void settings_init(const sysinfo_t *info)
 {
     si = info;
-    for (int i = 0; i < WALL_COUNT; i++)
-        wallpaper_paint(i, thumbs[i], THUMB_W, THUMB_H);
-    settings_set_wallpaper(0);
+    settings_set_wallpaper(scenery_count() > 0 ? WALL_COUNT : 0);
 }
 
 /* ---------- About ---------- */
@@ -146,21 +178,29 @@ static void heading(i32 x, i32 y, const char *title, const char *subtitle)
 static void draw_wallpapers(i32 x, i32 y)
 {
     const theme_t *t = theme();
-    heading(x, y, "Wallpaper", "Click a picture to set it as the desktop background");
+    heading(x, y, "Wallpaper", "3D scenes - click one to set it as the desktop");
 
-    for (int i = 0; i < WALL_COUNT; i++) {
+    int n = scenery_count(), loaded = 0;              /* одна миниатюра за кадр */
+    if (n > WALL_RENDERED) n = WALL_RENDERED;
+    for (int i = 0; i < n; i++) {
         i32 tx, ty;
         thumb_pos(i, &tx, &ty);
         tx += x;
         ty += y;
-        if (i == wall)
+        if (!thumb_ok[i] && !loaded) {
+            loaded = 1;
+            thumb_ok[i] = scenery_paint(i, thumbs[i], THUMB_W, THUMB_H) ? 1 : 2;
+        }
+        int sel = wall == WALL_COUNT + i;
+        if (sel)
             fb_fill_round_rect(tx - 3, ty - 3, THUMB_W + 6, THUMB_H + 6, 7, theme_accent(), 255);
         else
             fb_fill_round_rect(tx - 1, ty - 1, THUMB_W + 2, THUMB_H + 2, 5, RGB(0, 0, 0), 40);
-        fb_blit(tx, ty, thumbs[i], THUMB_W, THUMB_H);
-        const char *name = wallpaper_name(i);
+        if (thumb_ok[i] == 1) fb_blit(tx, ty, thumbs[i], THUMB_W, THUMB_H);
+        else fb_fill_round_rect(tx, ty, THUMB_W, THUMB_H, 6, t->card, 255);
+        const char *name = scenery_name(i);
         font_draw(tx + (THUMB_W - font_width(name, FONT_REGULAR)) / 2, ty + THUMB_H + 7,
-                  name, i == wall ? t->text : t->sub, FONT_REGULAR);
+                  name, sel ? t->text : t->sub, FONT_REGULAR);
     }
 }
 
@@ -186,6 +226,45 @@ static void draw_card(i32 x, i32 y, int dark, int selected, const char *label)
 
     font_draw(x + (CARD_W - font_width(label, FONT_REGULAR)) / 2, y + CARD_H + 8,
               label, selected ? t->text : t->sub, FONT_REGULAR);
+}
+
+static void draw_photos(i32 x, i32 y)
+{
+    const theme_t *t = theme();
+    heading(x, y, "Photos", "Your pictures as wallpaper");
+    int n = photos_count();
+    if (n == 0) {
+        static const char *const hint[4] = {
+            "No pictures found.",
+            "Put JPEG or PNG files into the folder \"Pictures\" on the",
+            "system disk (the FAT32 partition), then restart EndixOS.",
+            "JPEG must be baseline (not progressive), up to 4096 px wide." };
+        for (int i = 0; i < 4; i++)
+            font_draw(x + SIDEBAR_W + 25, y + 96 + i * 22, hint[i], i ? t->sub : t->text, FONT_REGULAR);
+        return;
+    }
+    int loaded = 0;                                   /* одна миниатюра за кадр: декодирование не подвешивает интерфейс */
+    for (int i = 0; i < n; i++) {
+        i32 tx, ty;
+        thumb_pos(i, &tx, &ty);
+        tx += x; ty += y;
+        if (!pthumb_ok[i] && !loaded) {
+            loaded = 1;
+            pthumb_ok[i] = photos_paint(i, pthumbs[i], THUMB_W, THUMB_H) ? 1 : 2;
+        }
+        if (wall == WALL_PHOTO0 + i) fb_fill_round_rect(tx - 3, ty - 3, THUMB_W + 6, THUMB_H + 6, 8, theme_accent(), 255);
+        if (pthumb_ok[i] == 1)
+            for (i32 r = 0; r < THUMB_H; r++)
+                for (i32 c = 0; c < THUMB_W; c++) fb_fill_rect(tx + c, ty + r, 1, 1, pthumbs[i][r * THUMB_W + c]);
+        else {
+            fb_fill_round_rect(tx, ty, THUMB_W, THUMB_H, 6, t->card, 255);
+            font_draw(tx + 10, ty + 22, pthumb_ok[i] == 2 ? "Can't open" : "Loading...", t->sub, FONT_REGULAR);
+        }
+        char nm[24]; int k = 0;
+        for (; photos_name(i)[k] && k < 14; k++) nm[k] = photos_name(i)[k];
+        nm[k] = 0;
+        font_draw(tx + (THUMB_W - font_width(nm, FONT_REGULAR)) / 2, ty + THUMB_H + 6, nm, t->text, FONT_REGULAR);
+    }
 }
 
 static void draw_themes(i32 x, i32 y)
@@ -239,6 +318,40 @@ static const char *const glass_label[GLASS_PARAMS] = { "Refraction", "Blur", "Fr
 #define PV_H 116
 #define RST_Y (GRP_Y + GLASS_PARAMS * ROW_H + 12)
 
+#define RES_Y 160
+#define RES_ROW 30
+static int res_sel = -1;
+static const char *res_msg = "";
+
+static void draw_display(i32 x, i32 y)
+{
+    const theme_t *t = theme();
+    heading(x, y, "Displays", "Brightness and screen resolution");
+    ui_group(x + GRP_X, y + 84, GRP_W, ROW_H);
+    font_draw(x + GRP_X + 16, y + 84 + 13, "Brightness", t->text, FONT_REGULAR);
+    ui_slider(x + SL_X, y + 84 + ROW_H / 2, SL_W, (cc_brightness() - 20) * 100 / 80, 1);
+    font_draw(x + GRP_X + 2, y + RES_Y - 22, "Resolution (applies after restart)", t->sub, FONT_BOLD);
+    ui_group(x + GRP_X, y + RES_Y, GRP_W, res_count() * RES_ROW);
+    int cur = res_current();
+    for (int i = 0; i < res_count(); i++) {
+        i32 ry = y + RES_Y + i * RES_ROW;
+        if (i == res_sel) fb_fill_round_rect(x + GRP_X + 6, ry + 3, GRP_W - 12, RES_ROW - 6, 6, theme_accent(), 70);
+        font_draw(x + GRP_X + 16, ry + 8, res_name(i), t->text, FONT_REGULAR);
+        if (i == cur) font_draw(x + GRP_X + GRP_W - 16 - font_width("current", FONT_REGULAR), ry + 8, "current", t->sub, FONT_REGULAR);
+    }
+    if (res_msg[0]) font_draw(x + GRP_X + 2, y + RES_Y + res_count() * RES_ROW + 10, res_msg, t->sub, FONT_REGULAR);
+    else if (!res_available()) font_draw(x + GRP_X + 2, y + RES_Y + res_count() * RES_ROW + 10, "Saving is available on an installed system.", t->sub, FONT_REGULAR);
+}
+
+static void draw_sound(i32 x, i32 y)
+{
+    const theme_t *t = theme();
+    heading(x, y, "Sound", "Output volume");
+    ui_group(x + GRP_X, y + 84, GRP_W, ROW_H);
+    font_draw(x + GRP_X + 16, y + 84 + 13, "Output volume", t->text, FONT_REGULAR);
+    ui_slider(x + SL_X, y + 84 + ROW_H / 2, SL_W, cc_volume(), 1);
+}
+
 static void draw_glass(i32 x, i32 y)
 {
     const theme_t *t = theme();
@@ -285,14 +398,33 @@ void settings_draw(i32 x, i32 y, i32 w, i32 h)
     /* фон боковой панели - стекло, его рисует оболочка окон */
     fb_blend_rect(x + SIDEBAR_W - 1, y, 1, h, RGB(0, 0, 0), t->line_alpha);
 
-    /* учётная запись */
-    fb_fill_circle(x + 36, y + 36, 17, theme_accent());
-    logo_draw(x + 36 - 10, y + 36 - 10, 20, RGB(255, 255, 255));
-    font_draw(x + 62, y + 20, "endix", t->text, FONT_BOLD);
-    font_draw(x + 62, y + 38, "EndixOS user", t->sub, FONT_REGULAR);
+    /* поле поиска */
+    fb_fill_round_rect(x + 10, y + 10, SIDEBAR_W - 20, 26, 8, theme_is_dark() ? RGB(255, 255, 255) : RGB(0, 0, 0), theme_is_dark() ? 26 : 12);
+    if (sq_focus) {
+        fb_fill_round_rect(x + 9, y + 9, SIDEBAR_W - 18, 28, 9, theme_accent(), 120);
+        fb_fill_round_rect(x + 11, y + 11, SIDEBAR_W - 22, 24, 7, t->card, 255);
+    }
+    fb_fill_circle(x + 24, y + 22, 5, t->sub); fb_fill_circle(x + 24, y + 22, 3, sq_focus ? t->card : t->side);   /* лупа */
+    for (int k = 0; k < 4; k++) fb_fill_rect(x + 27 + k, y + 25 + k, 2, 2, t->sub);
+    if (sqn) {
+        i32 tx = font_draw(x + 38, y + 15, sq, t->text, FONT_REGULAR);
+        if (sq_focus) fb_fill_rect(tx + 1, y + 16, 1, 15, t->text);
+    } else {
+        font_draw(x + 38, y + 15, "Search", t->sub, FONT_REGULAR);
+        if (sq_focus) fb_fill_rect(x + 37, y + 16, 1, 15, t->text);
+    }
 
-    for (int i = 0; i < PAGE_COUNT; i++) {
-        i32 ix = x + 10, iy = y + SIDE_ITEMS_Y + i * 34;
+    /* учётная запись */
+    fb_fill_circle(x + 36, y + 66, 17, theme_accent());
+    logo_draw(x + 36 - 10, y + 66 - 10, 20, RGB(255, 255, 255));
+    font_draw(x + 62, y + 50, "endix", t->text, FONT_BOLD);
+    font_draw(x + 62, y + 68, "EndixOS user", t->sub, FONT_REGULAR);
+
+    int vp[PAGE_COUNT], nv = vis_pages(vp);
+    if (!nv) font_draw(x + 18, y + SIDE_ITEMS_Y + 6, "No Results", t->sub, FONT_REGULAR);
+    for (int v = 0; v < nv; v++) {
+        int i = vp[v];
+        i32 ix = x + 10, iy = y + SIDE_ITEMS_Y + v * 34;
         int sel = (i == page);
         if (sel)
             fb_fill_round_rect(ix, iy, SIDEBAR_W - 20, 28, 7, theme_accent(), 255);
@@ -300,34 +432,65 @@ void settings_draw(i32 x, i32 y, i32 w, i32 h)
             fb_fill_round_rect(ix + 6, iy + 4, 20, 20, 6, sel ? RGB(255, 255, 255) : theme_accent(), 255);
             logo_draw(ix + 9, iy + 7, 14, sel ? theme_accent() : RGB(255, 255, 255));
         } else {
-            icon_draw(i == PAGE_WALL ? ICON_TILE_WALL : i == PAGE_GLASS ? ICON_TILE_GLASS : ICON_TILE_APPEAR, ix + 6, iy + 4, 20);
+            if (i == PAGE_DISPLAY) ui_squircle_icon(G_APPEAR, ix + 6, iy + 4, 20, RGB(52, 120, 246));
+            else if (i == PAGE_SOUND) ui_squircle_icon(G_MUSIC, ix + 6, iy + 4, 20, RGB(255, 69, 58));
+            else icon_draw(i == PAGE_WALL ? ICON_TILE_WALL : i == PAGE_GLASS ? ICON_TILE_GLASS : ICON_TILE_APPEAR, ix + 6, iy + 4, 20);
         }
         font_draw(ix + 36, iy + 5, page_name[i], sel ? RGB(255, 255, 255) : t->text, FONT_REGULAR);
     }
 
     switch (page) {
     case PAGE_WALL:   draw_wallpapers(x, y); break;
+    case PAGE_PHOTOS: draw_photos(x, y);     break;
     case PAGE_THEMES: draw_themes(x, y);     break;
     case PAGE_GLASS:  draw_glass(x, y);      break;
+    case PAGE_DISPLAY: draw_display(x, y);   break;
+    case PAGE_SOUND:  draw_sound(x, y);      break;
     case PAGE_ABOUT:  about_draw(x + SIDEBAR_W, y); break;
     }
 }
 
 int settings_click(i32 rx, i32 ry)
 {
-    for (int i = 0; i < PAGE_COUNT; i++) {
-        if (in_rect(rx, ry, 10, SIDE_ITEMS_Y + i * 34, SIDEBAR_W - 20, 28)) {
-            page = i;
-            return 1;
-        }
+    sq_focus = in_rect(rx, ry, 10, 10, SIDEBAR_W - 20, 26);
+    if (sq_focus) return 1;
+    {
+        int vp[PAGE_COUNT], nv = vis_pages(vp);
+        for (int v = 0; v < nv; v++)
+            if (in_rect(rx, ry, 10, SIDE_ITEMS_Y + v * 34, SIDEBAR_W - 20, 28)) {
+                page = vp[v];
+                return 1;
+            }
     }
 
     if (page == PAGE_WALL) {
-        for (int i = 0; i < WALL_COUNT; i++) {
+        for (int i = 0; i < scenery_count() && i < WALL_RENDERED; i++) {
             i32 tx, ty;
             thumb_pos(i, &tx, &ty);
             if (in_rect(rx, ry, tx, ty, THUMB_W, THUMB_H)) {
-                settings_set_wallpaper(i);
+                settings_set_wallpaper(WALL_COUNT + i);
+                return 1;
+            }
+        }
+    } else if (page == PAGE_DISPLAY || page == PAGE_SOUND) {
+        if (in_rect(rx, ry, SL_X - 12, 84, SL_W + 24, ROW_H)) {
+            sl_drag = page == PAGE_DISPLAY ? 20 : 21;
+            settings_drag(rx);
+            return 1;
+        }
+        if (page == PAGE_DISPLAY)
+            for (int i = 0; i < res_count(); i++)
+                if (in_rect(rx, ry, GRP_X, RES_Y + i * RES_ROW, GRP_W, RES_ROW)) {
+                    res_sel = i;
+                    res_apply(i, &res_msg);
+                    return 1;
+                }
+    } else if (page == PAGE_PHOTOS) {
+        for (int i = 0; i < photos_count(); i++) {
+            i32 tx, ty;
+            thumb_pos(i, &tx, &ty);
+            if (in_rect(rx, ry, tx, ty, THUMB_W, THUMB_H)) {
+                settings_set_wallpaper(WALL_PHOTO0 + i);
                 return 1;
             }
         }
@@ -391,8 +554,8 @@ int settings_click(i32 rx, i32 ry)
 #define AB_BTN_H 34
 #define AB_BTN_Y 392
 
-void settings_show_about(void) { page = PAGE_ABOUT; }
-void settings_show_page(int p) { page = p == 1 ? PAGE_THEMES : p == 2 ? PAGE_GLASS : PAGE_WALL; }
+void settings_show_about(void) { page = PAGE_ABOUT; sqn = 0; sq[0] = 0; }
+void settings_show_page(int p) { page = p == 1 ? PAGE_THEMES : p == 2 ? PAGE_GLASS : PAGE_WALL; sqn = 0; sq[0] = 0; }
 
 static void ab_row(i32 mid, i32 y, const char *label, const char *value, i32 maxw)
 {
@@ -475,8 +638,24 @@ void settings_drag(i32 rx)
 {
     i32 v = (rx - SL_X - 10) * 100 / (SL_W - 20);
     v = v < 0 ? 0 : (v > 100 ? 100 : v);
-    if (sl_drag >= 2) fb_glass_param_set(sl_drag - 2, v);
+    if (sl_drag == 20) cc_set_brightness(20 + v * 80 / 100);
+    else if (sl_drag == 21) cc_set_volume(v);
+    else if (sl_drag >= 2) fb_glass_param_set(sl_drag - 2, v);
     else wm_set_option(WM_OPT_DOCK_ZOOM, v);
 }
 
 void settings_release(void) { sl_drag = 0; }
+
+int settings_key(i32 key)
+{
+    if (!sq_focus) return 0;
+    if (key == 27) { sqn = 0; sq[0] = 0; sq_focus = 0; }
+    else if (key == '\b') { if (sqn) sq[--sqn] = 0; }
+    else if (key == '\n') {
+        int vp[PAGE_COUNT], nv = vis_pages(vp);
+        if (nv) page = vp[0];
+        sq_focus = 0;
+    } else if (key >= 32 && key < 127 && sqn < (int)sizeof(sq) - 1) { sq[sqn++] = (char)key; sq[sqn] = 0; }
+    else return 0;
+    return 1;
+}

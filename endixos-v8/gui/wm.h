@@ -38,6 +38,11 @@ void wm_render(void);
 
 /* Реализует ядро: перезагрузка машины. */
 void sys_reboot(void);
+void wm_live_hint(void);                                 /* показать подсказку про установщик */
+void wm_set_user(const char *user, const char *host);   /* имя из установленной системы: whoami, hostname */
 void sys_shutdown(void);
+
+/* Диагностика сети для ifconfig: счётчики кадров и состояние связи. */
+void wm_set_net_stats(void (*f)(u32 *rx, u32 *tx, u32 *txfail, int *link));
 
 #endif

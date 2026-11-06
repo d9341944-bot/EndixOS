@@ -1,5 +1,6 @@
 /* Сетевой стек EndixOS. Всё в целых числах и статических буферах. */
 #include "net.h"
+#include "tls.h"
 
 #define PIT_HZ 100
 #define ETH_IP  0x0800
@@ -464,11 +465,27 @@ static struct {
     u32 t0, tries;
 } tcp;
 
-static char http_path[128], http_hostname[64], http_loc[96];
+static char http_path[256], http_hostname[64], http_loc[96];
+static int http_tls;                                   /* 1 - https: поверх TCP идёт TLS */
+static u8 tls_out[1300]; static u32 tls_out_n;
 static int http_in_hdr, http_status, http_show_hdr;
 static u32 http_body, http_port;
 static char http_line[110]; static u32 http_ll;
 static u32 http_tail;                                 /* последние 4 байта заголовка */
+
+/* Режим загрузки в память (для браузера): тело страницы копируется в буфер, перенаправления выполняются сами. */
+static int fx_mode, fx_state, fx_status, fx_trunc, fx_follow, fx_ctype, http_chunked;
+static u8 *fx_buf; static u32 fx_cap, fx_len;
+static char fx_err[110], fx_url[256];
+static int ck_st; static u32 ck_left;
+static int http_begin(const char *url, int show);
+
+static void hsay(const char *m)
+{
+    if (!fx_mode) { say(m); return; }
+    u32 i = 0; while (m[i] && i < sizeof(fx_err) - 1) { fx_err[i] = m[i]; i++; }
+    fx_err[i] = 0; fx_state = 3;
+}
 
 static void http_flush(void) { if (http_ll) { http_line[http_ll] = 0; say(http_line); http_ll = 0; } }
 
@@ -485,7 +502,7 @@ static void tcp_seg(u8 flags, u32 seq, const u8 *data, u32 len)
     u32 hl = (flags & 2) ? 24 : 20;
     if (len > 1200) return;
     p16(b, tcp.lport); p16(b + 2, tcp.rport); p32(b + 4, seq); p32(b + 8, (flags & 0x10) ? tcp.rcv_nxt : 0);
-    b[12] = (u8)(hl / 4 << 4); b[13] = flags; p16(b + 14, 4096); p16(b + 16, 0); p16(b + 18, 0);
+    b[12] = (u8)(hl / 4 << 4); b[13] = flags; p16(b + 14, 16384); p16(b + 16, 0); p16(b + 18, 0);
     if (flags & 2) { b[20] = 2; b[21] = 4; p16(b + 22, 1400); }
     mcopy(b + hl, data, len);
     u32 n = hl + len;
@@ -509,15 +526,34 @@ static void tcp_abort(void)
     tcp.state = T_CLOSED;
 }
 
-static void http_stop(void) { http_flush(); tcp_abort(); }
+static void http_stop(void) { tls_reset(); http_flush(); tcp_abort(); }
 
 static void http_end(const char *err)
 {
+    tls_reset();
     http_flush();
-    if (err) say(err);
-    else if (http_in_hdr) say("curl: empty reply from server");
     tcp.state = T_CLOSED;
     job.kind = J_NONE;
+    if (!fx_mode) {
+        if (err) say(err);
+        else if (http_in_hdr) say("curl: empty reply from server");
+        return;
+    }
+    if (err) { hsay(err); return; }
+    if (http_in_hdr) { hsay("The server closed the connection without answering."); return; }
+    if (http_status >= 300 && http_status < 400 && http_loc[0] && !fx_trunc) {
+        char nu[256];
+        net_url_join(fx_url, http_loc, nu, sizeof(nu));
+        u32 i = 0; while (nu[i] && i < sizeof(fx_url) - 1) { fx_url[i] = nu[i]; i++; }
+        fx_url[i] = 0;
+        if (fx_follow >= 5) { hsay("Too many redirects."); return; }
+        fx_follow++; fx_len = 0;
+        if (http_begin(fx_url, 0) < 0 && fx_state != 3) hsay("Could not follow the redirect.");
+        return;
+    }
+    fx_status = http_status;
+    if (fx_buf) fx_buf[fx_len] = 0;
+    fx_state = 2;
 }
 
 static void http_hdr_line(void)
@@ -534,6 +570,18 @@ static void http_hdr_line(void)
         const char *v = l + 9; while (*v == ' ') v++;
         u32 i = 0; while (v[i] && i < sizeof(http_loc) - 1) { http_loc[i] = v[i]; i++; }
         http_loc[i] = 0;
+    }
+    if (fx_mode) {
+        if ((l[0] | 32) == 't' && (l[8] | 32) == '-' && (l[9] | 32) == 'e') {            /* Transfer-Encoding */
+            for (u32 i = 0; l[i]; i++) if ((l[i] | 32) == 'c' && (l[i+1] | 32) == 'h' && (l[i+2] | 32) == 'u' && (l[i+3] | 32) == 'n') http_chunked = 1;
+        } else if ((l[0] | 32) == 'c' && (l[7] | 32) == 't' && (l[8] | 32) == 'y' && l[12] == ':') {   /* Content-Type */
+            for (u32 i = 13; l[i]; i++) {
+                if ((l[i] | 32) == 'p' && (l[i+1] | 32) == 'l' && (l[i+2] | 32) == 'a' && (l[i+3] | 32) == 'i') fx_ctype = 1;
+                else if ((l[i] | 32) == 'h' && (l[i+1] | 32) == 't' && (l[i+2] | 32) == 'm' && (l[i+3] | 32) == 'l') fx_ctype = 0;
+                else if (((l[i] | 32) == 'i' && (l[i+1] | 32) == 'm' && (l[i+2] | 32) == 'a' && (l[i+3] | 32) == 'g') ||
+                         ((l[i] | 32) == 'a' && (l[i+1] | 32) == 'p' && (l[i+2] | 32) == 'p' && (l[i+3] | 32) == 'l')) fx_ctype = 2;
+            }
+        }
     }
     if (http_show_hdr) say(l);
     http_ll = 0;
@@ -557,6 +605,25 @@ static void http_data(const u8 *d, u32 n)
             }
             continue;
         }
+        if (fx_mode) {
+            if (http_chunked) {                                 /* разбор chunked: "размер\r\n данные \r\n" */
+                if (ck_st == 0) {
+                    if (c >= '0' && c <= '9') ck_left = ck_left * 16 + (u32)(c - '0');
+                    else if ((c | 32) >= 'a' && (c | 32) <= 'f') ck_left = ck_left * 16 + (u32)((c | 32) - 'a' + 10);
+                    else if (c == '\n') ck_st = ck_left ? 2 : 4;
+                    else ck_st = 1;                              /* расширение: до конца строки */
+                    if (ck_st == 1 && c == '\n') ck_st = ck_left ? 2 : 4;
+                    continue;
+                }
+                if (ck_st == 1) { if (c == '\n') ck_st = ck_left ? 2 : 4; continue; }
+                if (ck_st == 3) { if (c == '\n') { ck_st = 0; ck_left = 0; } continue; }
+                if (ck_st == 4) continue;
+                if (--ck_left == 0) ck_st = 3;
+            }
+            if (fx_len + 1 < fx_cap) { fx_buf[fx_len++] = c; http_body++; }
+            else { fx_trunc = 1; tcp_abort(); http_end(0); return; }
+            continue;
+        }
         if (http_body >= 8192) {
             http_flush(); say("[output truncated at 8 KB]");
             tcp_abort(); http_end(0); return;
@@ -570,11 +637,28 @@ static void http_data(const u8 *d, u32 n)
     }
 }
 
+static void tls_flush(void)
+{
+    if (tls_out_n && tcp.state == T_EST) tcp_send_data(0x18, tls_out, tls_out_n);
+    tls_out_n = 0;
+}
+
+static void http_data(const u8 *d, u32 n);
+static void http_request(void);
+static void http_end(const char *err);
+
+static void tcb_send(const u8 *d, u32 n) { for (u32 i = 0; i < n && tls_out_n < sizeof(tls_out); i++) tls_out[tls_out_n++] = d[i]; }
+static void tcb_ready(void) { http_request(); }
+static void tcb_data(const u8 *d, u32 n) { http_data(d, n); }
+static void tcb_closed(const char *e) { if (job.kind == J_HTTP) http_end(e); }
+static const tls_cb_t tls_cbs = { tcb_send, tcb_ready, tcb_data, tcb_closed };
+
 static void http_request(void)
 {
     u8 b[400]; char *p = (char *)b;
     p = put_s(p, "GET "); p = put_s(p, http_path); p = put_s(p, " HTTP/1.0\r\nHost: "); p = put_s(p, http_hostname);
-    p = put_s(p, "\r\nUser-Agent: EndixOS/8.0\r\nAccept: */*\r\nConnection: close\r\n\r\n");
+    p = put_s(p, "\r\nUser-Agent: EndixOS/8.0\r\nAccept: text/html,text/plain,*/*\r\nAccept-Encoding: identity\r\nAccept-Language: en,ru\r\nConnection: close\r\n\r\n");
+    if (http_tls) { tls_write(b, (u32)((u8 *)p - b)); tls_flush(); return; }
     tcp_send_data(0x18, b, (u32)((u8 *)p - b));
 }
 
@@ -589,7 +673,8 @@ static void tcp_rx(u32 src, const u8 *p, u32 len)
         if ((fl & 0x12) == 0x12 && ack == tcp.iss + 1) {
             tcp.rcv_nxt = seq + 1; tcp.snd_una = ack; tcp.state = T_EST; tcp.last_len = 0; tcp.last_flags = 0;
             tcp_seg(0x10, tcp.snd_nxt, 0, 0);
-            http_request();
+            if (http_tls) { tls_out_n = 0; tls_start(&tls_cbs, http_hostname); tls_flush(); }
+            else http_request();
         }
         return;
     }
@@ -601,7 +686,7 @@ static void tcp_rx(u32 src, const u8 *p, u32 len)
         if (seq == tcp.rcv_nxt) {
             tcp.rcv_nxt += dl;
             tcp_seg(0x10, tcp.snd_nxt, 0, 0);
-            if (job.kind == J_HTTP) http_data(d, dl);
+            if (job.kind == J_HTTP) { if (http_tls) { tls_input(d, dl); tls_flush(); } else http_data(d, dl); }
             if (tcp.state == T_CLOSED) return;        /* оборвано в http_data */
         } else { tcp_seg(0x10, tcp.snd_nxt, 0, 0); return; }
     }
@@ -633,7 +718,7 @@ static void http_dns_done(u32 ip, int ok, void *arg)
     if (job.kind != J_HTTP_DNS) return;
     if (!ok) {
         char b[110], *q = b;
-        q = put_s(q, "curl: could not resolve host: "); q = put_s(q, http_hostname); *q = 0; say(b);
+        q = put_s(q, fx_mode ? "Could not find the server: " : "curl: could not resolve host: "); q = put_s(q, http_hostname); *q = 0; hsay(b);
         job.kind = J_NONE; return;
     }
     job.kind = J_HTTP;
@@ -641,24 +726,24 @@ static void http_dns_done(u32 ip, int ok, void *arg)
     tcp.iss = now * 2654435u + 12345u; tcp.snd_nxt = tcp.iss; tcp.snd_una = tcp.iss;
     tcp.state = T_SYN; tcp.rcv_nxt = 0;
     http_in_hdr = 1; http_status = 0; http_body = 0; http_tail = 0; http_ll = 0; http_loc[0] = 0;
+    http_chunked = 0; ck_st = 0; ck_left = 0; fx_ctype = 0;
     tcp_send_data(0x02, 0, 0);
 }
 
-int net_http_get(const char *url, int show_headers)
+static int http_begin(const char *url, int show_headers)
 {
     const char *u = url;
+    http_tls = 0;
     if (u[0] == 'h' && u[1] == 't' && u[2] == 't' && u[3] == 'p') {
-        if (u[4] == 's' && u[5] == ':') { say("curl: https:// is not supported yet (TLS is not implemented). Use http://"); return -1; }
-        if (u[4] == ':' && u[5] == '/' && u[6] == '/') u += 7;
+        if (u[4] == 's' && u[5] == ':' && u[6] == '/' && u[7] == '/') { http_tls = 1; u += 8; }
+        else if (u[4] == ':' && u[5] == '/' && u[6] == '/') u += 7;
     }
-    if (job.kind != J_NONE || dns.busy) { say("network: busy"); return -1; }
-    if (!ip_up) { say("network is unreachable (no IP address yet)"); return -1; }
     u32 i = 0;
-    while (*u && *u != '/' && *u != ':' && i < sizeof(http_hostname) - 1) http_hostname[i++] = *u++;
+    while (*u && *u != '/' && *u != ':' && *u != '?' && i < sizeof(http_hostname) - 1) http_hostname[i++] = *u++;
     http_hostname[i] = 0;
-    http_port = 80;
+    http_port = http_tls ? 443 : 80;
     if (*u == ':') { u++; http_port = 0; while (*u >= '0' && *u <= '9') http_port = http_port * 10 + (u32)(*u++ - '0'); }
-    if (!i || http_port == 0 || http_port > 65535) { say("curl: bad URL"); return -1; }
+    if (!i || http_port == 0 || http_port > 65535) { hsay("curl: bad URL"); return -1; }
     i = 0;
     if (*u != '/') http_path[i++] = '/';
     while (*u && i < sizeof(http_path) - 1) http_path[i++] = *u++;
@@ -672,6 +757,89 @@ int net_http_get(const char *url, int show_headers)
     if (ok) { http_dns_done(ip, 1, 0); return 0; }
     if (net_resolve(http_hostname, http_dns_done, 0) < 0) { job.kind = J_NONE; return -1; }
     return 0;
+}
+
+int net_http_get(const char *url, int show_headers)
+{
+    if (job.kind != J_NONE || dns.busy) { say("network: busy"); return -1; }
+    if (!ip_up) { say("network is unreachable (no IP address yet)"); return -1; }
+    fx_mode = 0;
+    return http_begin(url, show_headers);
+}
+
+int net_fetch(const char *url, u8 *buf, u32 cap)
+{
+    fx_mode = 1; fx_buf = buf; fx_cap = cap; fx_len = 0; fx_trunc = 0; fx_follow = 0; fx_status = 0; fx_err[0] = 0;
+    u32 i = 0; while (url[i] && i < sizeof(fx_url) - 1) { fx_url[i] = url[i]; i++; }
+    fx_url[i] = 0;
+    if (job.kind != J_NONE || dns.busy) { fx_state = 3; hsay("The network is busy."); return -1; }
+    if (!ip_up) { fx_state = 3; hsay("No network connection (no IP address yet). Check the network in QEMU."); return -1; }
+    fx_state = 1;
+    if (http_begin(url, 0) < 0) { if (fx_state != 3) hsay("Bad address."); return -1; }
+    return 0;
+}
+
+void net_fetch_info(net_fetch_t *f)
+{
+    f->state = fx_state; f->status = fx_status; f->len = fx_len; f->truncated = fx_trunc; f->ctype = fx_ctype;
+    mcopy(f->err, fx_err, sizeof(f->err)); mcopy(f->url, fx_url, sizeof(f->url));
+}
+
+void net_fetch_abort(void)
+{
+    if (fx_mode && job.kind != J_NONE) { dns.busy = 0; http_stop(); job.kind = J_NONE; }
+    fx_state = 0;
+}
+
+/* Склейка адреса: абсолютный, //host, /путь, ?запрос или относительный (с обработкой . и ..). */
+void net_url_join(const char *base, const char *ref, char *out, u32 cap)
+{
+    char t[320]; u32 n = 0;
+    u32 rl = 0; while (ref[rl] && ref[rl] != '#') rl++;
+    u32 i = 0;
+    while (i < rl && ref[i] != ':' && ref[i] != '/' && ref[i] != '?') i++;
+    int has_scheme = i < rl && ref[i] == ':' && i > 0;
+    #define EMIT(ch) do { if (n < sizeof(t) - 1) t[n++] = (ch); } while (0)
+    if (has_scheme) { for (u32 k = 0; k < rl; k++) EMIT(ref[k]); }
+    else {
+        u32 sch = 0; while (base[sch] && !(base[sch] == ':' && base[sch+1] == '/' && base[sch+2] == '/')) sch++;
+        u32 auth = base[sch] ? sch + 3 : 0;
+        u32 pe = auth; while (base[pe] && base[pe] != '/' && base[pe] != '?' && base[pe] != '#') pe++;   /* конец authority */
+        u32 qe = pe; while (base[qe] && base[qe] != '?' && base[qe] != '#') qe++;                         /* конец пути */
+        if (rl == 0) { for (u32 k = 0; base[k] && base[k] != '#'; k++) EMIT(base[k]); }
+        else if (ref[0] == '/' && ref[1] == '/') { for (u32 k = 0; k < sch + 1; k++) EMIT(base[k]); for (u32 k = 0; k < rl; k++) EMIT(ref[k]); }
+        else if (ref[0] == '?') { for (u32 k = 0; k < qe; k++) EMIT(base[k]); for (u32 k = 0; k < rl; k++) EMIT(ref[k]); }
+        else {
+            for (u32 k = 0; k < pe; k++) EMIT(base[k]);
+            u32 ps = n;                                       /* начало пути в t */
+            if (ref[0] == '/') { for (u32 k = 0; k < rl; k++) EMIT(ref[k]); }
+            else {
+                u32 ld = pe; for (u32 k = pe; k < qe; k++) if (base[k] == '/') ld = k;    /* последний '/' пути */
+                if (ld == pe) EMIT('/');
+                else for (u32 k = pe; k <= ld; k++) EMIT(base[k]);
+                for (u32 k = 0; k < rl; k++) EMIT(ref[k]);
+            }
+            /* убрать ./ и ../ в пути (до ? или конца) */
+            char o[320]; u32 m = 0, k = ps;
+            for (u32 z = 0; z < ps; z++) o[m++] = t[z];
+            u32 floor_ = m;
+            while (k < n && t[k] != '?') {
+                if (t[k] == '/' && t[k+1] == '.' && (t[k+2] == '/' || t[k+2] == 0 || t[k+2] == '?')) { k += 2; if (k >= n || t[k] != '/') o[m++] = '/'; continue; }
+                if (t[k] == '/' && t[k+1] == '.' && t[k+2] == '.' && (t[k+3] == '/' || t[k+3] == 0 || t[k+3] == '?')) {
+                    while (m > floor_ && o[m - 1] != '/') m--;
+                    if (m > floor_) m--;
+                    k += 3; if (k >= n || t[k] != '/') o[m++] = '/'; continue;
+                }
+                o[m++] = t[k++];
+            }
+            while (k < n) o[m++] = t[k++];
+            for (u32 z = 0; z < m; z++) t[z] = o[z];
+            n = m;
+        }
+    }
+    #undef EMIT
+    u32 c = 0; while (c < n && c + 1 < cap) { out[c] = t[c]; c++; }
+    out[c] = 0;
 }
 
 static void icmp_rx(u32 src, const u8 *p, u32 len, u32 ttl)
@@ -790,3 +958,5 @@ void net_info(net_info_t *i)
 }
 
 int net_changed(void) { int c = changed; changed = 0; return c; }
+
+int net_dhcp_state(void) { return dstate; }   /* 0 не начат, 1 DISCOVER, 2 REQUEST, 3 есть адрес */

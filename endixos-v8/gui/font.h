@@ -26,6 +26,9 @@ extern const u8           font_height[FONT_STYLES];
 
 /* y - верх строки. Строки в UTF-8 (латиница и кириллица). Возвращает x после текста. */
 i32 font_draw(i32 x, i32 y, const char *s, u32 color, int style);
+/* Вертикальный диапазон, за пределы которого текст не рисуется (для прокручиваемых областей). */
+void font_set_clip(i32 y0, i32 y1);
+void font_clear_clip(void);
 i32 font_width(const char *s, int style);
 
 #endif

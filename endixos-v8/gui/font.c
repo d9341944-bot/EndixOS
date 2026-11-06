@@ -31,6 +31,10 @@ static u32 next_cp(const char **ps)
     return cp;
 }
 
+static i32 clip_y0 = -100000, clip_y1 = 100000;
+void font_set_clip(i32 y0, i32 y1) { clip_y0 = y0; clip_y1 = y1; }
+void font_clear_clip(void) { clip_y0 = -100000; clip_y1 = 100000; }
+
 i32 font_draw(i32 x, i32 y, const char *s, u32 color, int style)
 {
     i32 base = y + font_ascent[style];
@@ -38,10 +42,12 @@ i32 font_draw(i32 x, i32 y, const char *s, u32 color, int style)
         const font_glyph_t *g = &font_glyphs[style][glyph_index(next_cp(&s))];
         const u8 *a = &font_alpha[g->off];
         for (i32 j = 0; j < g->h; j++) {
+            i32 yy = base + g->y + j;
+            if (yy < clip_y0 || yy >= clip_y1) continue;
             for (i32 i = 0; i < g->w; i++) {
                 u32 al = a[j * g->w + i];
                 if (al)
-                    fb_blend_pixel(x + g->x + i, base + g->y + j, color, al);
+                    fb_blend_pixel(x + g->x + i, yy, color, al);
             }
         }
         x += g->adv;

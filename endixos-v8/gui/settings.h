@@ -12,6 +12,7 @@ int  settings_wallpaper(void);
 
 void settings_draw(i32 x, i32 y, i32 w, i32 h);
 int  settings_click(i32 rx, i32 ry);
+int  settings_key(i32 key);                        /* ввод в поле Search; 1 - клавиша использована */
 int  settings_dragging(void);                       /* тянут ползунок */
 void settings_drag(i32 rx);
 void settings_release(void);                /* 1, если что-то изменилось */

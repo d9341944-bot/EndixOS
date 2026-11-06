@@ -39,7 +39,7 @@ static void sp_walk(int dir, int depth)
     int list[64];
     int n = fs_list(dir, list, 64);
     for (int i = 0; i < n && sp_n < SP_MAXR; i++) {
-        if (sp_has(fs_name(list[i]), sp_q)) sp_add(fs_is_dir(list[i]) ? SR_DIR : SR_FILE, -1, list[i], fs_name(list[i]));
+        if (fs_name(list[i])[0] != '.' && sp_has(fs_name(list[i]), sp_q)) sp_add(fs_is_dir(list[i]) ? SR_DIR : SR_FILE, -1, list[i], fs_name(list[i]));
         if (fs_is_dir(list[i]) && depth < 5) sp_walk(list[i], depth + 1);
     }
 }
@@ -70,6 +70,7 @@ static void sp_search(void)
     for (int a = 0; a < APP_COUNT; a++)
         if (sp_has(app_name[a], sp_q)) sp_add(SR_APP, a, -1, app_name[a]);
     if (sp_has("Launchpad", sp_q)) sp_add(SR_APP, -2, -1, "Launchpad");
+    if (sp_has("Install EndixOS", sp_q) || sp_has("Installer", sp_q)) sp_add(SR_APP, -4, -1, "Install EndixOS");
     if (sp_has("Mission Control", sp_q)) sp_add(SR_APP, -3, -1, "Mission Control");
     sp_walk(fs_home(), 0);
 }
@@ -97,6 +98,7 @@ static void sp_run(int i)
     if (r->kind == SR_APP) {
         if (r->app >= 0) open_window(r->app);
         else if (r->app == -2) lp_show();
+        else if (r->app == -4) { installer_open(); scene_dirty = 1; }
         else mc_toggle();
     } else {
         open_window(APP_FILES);
@@ -179,63 +181,101 @@ static void sp_draw(void)
 }
 
 /* ---------- уведомления ---------- */
+/* Стопка баннеров справа сверху (до трёх, новый сверху). Наведение останавливает таймер и показывает крестик, клик закрывает. */
 
 #define NT_W 340
 #define NT_H 74
+#define NT_GAP 10
+#define NT_MAX 3
 #define NT_LIFE 380                                /* тиков: 3.8 с */
-static char nt_title[32], nt_text[80];
-static u32  nt_t0;
-static int  nt_on;
-static i32  nt_v;
+typedef struct { char title[32], text[80]; u32 t0; int on, icon; i32 v, yq; } nt_t;
+static nt_t nts[NT_MAX];
 
-static void notify(const char *title, const char *text)
+static void notify_icon(const char *title, const char *text, int icon)
 {
+    for (int k = NT_MAX - 1; k > 0; k--) nts[k] = nts[k - 1];     /* остальные сдвигаются вниз */
+    nt_t *n = &nts[0];
     int i = 0;
-    while (title[i] && i < 30) { nt_title[i] = title[i]; i++; }
-    nt_title[i] = 0;
+    while (title[i] && i < 30) { n->title[i] = title[i]; i++; }
+    n->title[i] = 0;
     i = 0;
-    while (text[i] && i < 78) { nt_text[i] = text[i]; i++; }
-    nt_text[i] = 0;
-    nt_t0 = now_ticks;
-    nt_on = 1;
+    while (text[i] && i < 78) { n->text[i] = text[i]; i++; }
+    n->text[i] = 0;
+    n->t0 = now_ticks; n->on = 1; n->icon = icon; n->v = 0; n->yq = 0;
     scene_dirty = 1;
+}
+
+static void notify(const char *title, const char *text) { notify_icon(title, text, -1); }
+
+static i32 nt_y(int k) { return MENUBAR_H + 10 + nts[k].yq * (NT_H + NT_GAP) / 1024; }
+
+static int nt_at(i32 x, i32 y)
+{
+    i32 W = (i32)fb_width();
+    for (int k = 0; k < NT_MAX; k++) {
+        if (!nts[k].on) continue;
+        i32 ty = nt_y(k);
+        if (x >= W - NT_W - 14 && x < W - 14 && y >= ty && y < ty + NT_H) return k;
+    }
+    return -1;
 }
 
 static int nt_tick(u32 dt)
 {
-    if (nt_on && (i32)(now_ticks - nt_t0) > NT_LIFE) nt_on = 0;
-    i32 n = anim_approach(nt_v, nt_on ? 1024 : 0, dt);
-    int moving = n != nt_v || (n != 0 && n != 1024) || nt_on;
-    nt_v = n;
+    int moving = 0, slot = 0;
+    int hot = nt_at(cur_x, cur_y);
+    for (int k = 0; k < NT_MAX; k++) {
+        nt_t *n = &nts[k];
+        if (n->on && k == hot) n->t0 = now_ticks;                         /* пока курсор на баннере, он не исчезает */
+        if (n->on && (i32)(now_ticks - n->t0) > NT_LIFE) n->on = 0;
+        i32 v = anim_approach(n->v, n->on ? 1024 : 0, dt);
+        i32 q = anim_approach(n->yq, slot * 1024, dt);
+        if (v != n->v || q != n->yq || n->on) moving = 1;
+        n->v = v; n->yq = q;
+        if (n->on || n->v > 0) slot++;
+    }
     return moving;
 }
 
-static int nt_hit(i32 x, i32 y)
-{
-    i32 W = (i32)fb_width();
-    return nt_on && x >= W - NT_W - 14 && x < W - 14 && y >= MENUBAR_H + 10 && y < MENUBAR_H + 10 + NT_H;
-}
+static int nt_hit(i32 x, i32 y) { return nt_at(x, y) >= 0; }
+static void nt_dismiss_at(i32 x, i32 y) { int k = nt_at(x, y); if (k >= 0) nts[k].on = 0; }
 
 static void nt_draw(void)
 {
-    if (nt_v <= 0) return;
     const theme_t *t = theme();
     i32 W = (i32)fb_width();
-    i32 off = (1024 - nt_v) * (NT_W + 30) / 1024;
-    i32 x = W - NT_W - 14 + off, y = MENUBAR_H + 10;
-    fb_glass(x, y, NT_W, NT_H, 20, GLASS_ALL, 12, theme_is_dark() ? RGB(44, 44, 50) : RGB(246, 246, 249),
-             theme_is_dark() ? 160 : 175, 26);
-    fb_fill_round_rect(x + 14, y + 17, 40, 40, 11, theme_accent(), 255);
-    logo_draw(x + 14 + 10, y + 17 + 10, 20, RGB(255, 255, 255));
-    font_draw(x + 66, y + 14, nt_title, t->text, FONT_BOLD);
-    char b[48];
-    int n = 0;
-    while (nt_text[n] && n < 46) { b[n] = nt_text[n]; n++; }
-    b[n] = 0;
-    while (n > 1 && font_width(b, FONT_REGULAR) > NT_W - 80) {
-        n--;
-        while (n > 1 && ((u8)b[n] & 0xC0) == 0x80) n--;
-        b[n] = 0;
+    int hot = nt_at(cur_x, cur_y);
+    for (int k = NT_MAX - 1; k >= 0; k--) {
+        nt_t *n = &nts[k];
+        if (n->v <= 0) continue;
+        i32 off = (1024 - n->v) * (NT_W + 30) / 1024;
+        i32 x = W - NT_W - 14 + off, y = nt_y(k);
+        fb_glass(x, y, NT_W, NT_H, 22, GLASS_ALL, 14, theme_is_dark() ? RGB(44, 44, 50) : RGB(246, 246, 249),
+                 theme_is_dark() ? 120 : 130, 30);
+        if (n->icon >= 0) icon_draw(n->icon, x + 14, y + 17, 40);
+        else {
+            fb_fill_round_rect(x + 14, y + 17, 40, 40, 11, theme_accent(), 255);
+            logo_draw(x + 14 + 10, y + 17 + 10, 20, RGB(255, 255, 255));
+        }
+        font_draw(x + 66, y + 14, n->title, t->text, FONT_BOLD);
+        char b[80];
+        int c = 0;
+        while (n->text[c] && c < 78) { b[c] = n->text[c]; c++; }
+        b[c] = 0;
+        while (c > 1 && font_width(b, FONT_REGULAR) > NT_W - 80) {
+            c--;
+            while (c > 1 && ((u8)b[c] & 0xC0) == 0x80) c--;
+            b[c] = 0;
+        }
+        font_draw(x + 66, y + 38, b, t->sub, FONT_REGULAR);
+        if (k == hot) {                                                    /* крестик закрытия */
+            fb_fill_circle(x + 8, y + 8, 9, theme_is_dark() ? RGB(70, 70, 78) : RGB(222, 222, 228));
+            for (i32 d = -3; d <= 3; d++) {
+                fb_fill_rect(x + 8 + d, y + 8 + d, 1, 1, t->text);
+                fb_fill_rect(x + 8 + d, y + 8 - d, 1, 1, t->text);
+            }
+        } else {
+            font_draw(x + NT_W - 14 - font_width("now", FONT_REGULAR), y + 14, "now", t->sub, FONT_REGULAR);
+        }
     }
-    font_draw(x + 66, y + 38, b, t->sub, FONT_REGULAR);
 }

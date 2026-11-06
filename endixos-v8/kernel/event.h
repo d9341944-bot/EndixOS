@@ -6,6 +6,8 @@
 #define EV_MOUSE 1   /* a = x, b = y, c = кнопки (бит0 левая, бит1 правая, бит2 средняя) */
 #define EV_KEY   2   /* a = символ (ASCII, '\b', '\n', '\t', 27) или KEY_*, b = 1 если нажат Ctrl */
 
+#define EV_WHEEL 3   /* a = прокрутка колеса: >0 вверх (от пользователя), <0 вниз */
+
 /* Коды клавиш без символа (значения выше ASCII). */
 #define KEY_UP     0x101
 #define KEY_DOWN   0x102
@@ -18,6 +20,7 @@
 #define KEY_PGDN   0x109
 #define KEY_HOME   0x10A
 #define KEY_END    0x10B
+#define KEY_LOCK   0x10C   /* Win+L */
 
 typedef struct {
     int type;

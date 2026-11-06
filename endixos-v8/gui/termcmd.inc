@@ -427,7 +427,7 @@ static void cmd_kill(char *args)
 static void cmd_open(char *args)
 {
     char *p = args, *a = next_tok(&p);
-    if (!a) { term_puts("usage: open files|terminal|settings|snake|about|launchpad|mission\n"); return; }
+    if (!a) { term_puts("usage: open files|terminal|settings|snake|about|browser|launchpad|mission\n"); return; }
     if (s_eq_i(a, "launchpad")) { lp_show(); return; }
     if (s_eq_i(a, "mission") || s_eq_i(a, "missioncontrol")) { mc_toggle(); return; }
     int app = app_by_name(a);
@@ -589,12 +589,62 @@ static int nj_wait;                                /* терминал ждёт 
 static int nj_dirty;
 static void nj_log(const char *line) { term_puts(line); term_putc('\n'); nj_dirty = 1; }
 
+static void (*net_stats_hook)(u32 *rx, u32 *tx, u32 *txfail, int *link);
+void wm_set_net_stats(void (*f)(u32 *, u32 *, u32 *, int *)) { net_stats_hook = f; }
+
+static void cmd_disks(void)
+{
+    char b[16];
+    int n = ahci_init();
+    term_puts("AHCI: "); term_puts(ahci_status()); term_putc('\n');
+    for (int i = 0; i < n; i++) {
+        const ahci_disk_t *d = ahci_disk(i);
+        term_puts("  sata"); u_put(b, i); term_puts(b); term_puts(": "); term_puts(d->model); term_puts("  ");
+        u_put(b, (int)(d->sectors / 2048)); term_puts(b); term_puts(" MB\n");
+        u8 sec[1024];
+        if (ahci_read(i, 0, 1, sec) != 0) { term_puts("    cannot read sector 0\n"); continue; }
+        if (sec[510] != 0x55 || sec[511] != 0xAA) { term_puts("    no partition table (empty or not MBR)\n"); continue; }
+        for (int k = 0; k < 4; k++) {
+            const u8 *e = sec + 446 + k * 16;
+            u32 st = (u32)e[8] | (u32)e[9] << 8 | (u32)e[10] << 16 | (u32)e[11] << 24, sz = (u32)e[12] | (u32)e[13] << 8 | (u32)e[14] << 16 | (u32)e[15] << 24;
+            if (!e[4]) continue;
+            term_puts("    part "); u_put(b, k + 1); term_puts(b); term_puts(": type 0x");
+            static const char hx[] = "0123456789abcdef"; term_putc(hx[e[4] >> 4]); term_putc(hx[e[4] & 15]);
+            term_puts("  start "); u_put(b, (int)st); term_puts(b); term_puts("  size "); u_put(b, (int)(sz / 2048)); term_puts(b); term_puts(" MB\n");
+        }
+    }
+}
+
+static void cmd_lspci(void)
+{
+    static const char hx[] = "0123456789abcdef";
+    int n = 0;
+    for (u32 bus = 0; bus < 4; bus++)
+        for (u32 dev = 0; dev < 32; dev++)
+            for (u32 fn = 0; fn < 8; fn++) {
+                u32 id = pci_read32(bus, dev, fn, 0);
+                if ((id & 0xFFFF) == 0xFFFF) { if (fn == 0) break; continue; }
+                u32 cls = pci_read32(bus, dev, fn, 8) >> 16;
+                char l[40]; int k = 0;
+                l[k++] = hx[bus >> 4 & 15]; l[k++] = hx[bus & 15]; l[k++] = ':'; l[k++] = hx[dev >> 4 & 15]; l[k++] = hx[dev & 15]; l[k++] = '.'; l[k++] = hx[fn]; l[k++] = ' ';
+                for (int sh = 12; sh >= 0; sh -= 4) l[k++] = hx[(id >> sh) & 15];
+                l[k++] = ':';
+                for (int sh = 28; sh >= 16; sh -= 4) l[k++] = hx[(id >> sh) & 15];
+                l[k++] = ' '; l[k++] = 'c'; l[k++] = 'l'; l[k++] = ' ';
+                for (int sh = 12; sh >= 0; sh -= 4) l[k++] = hx[(cls >> sh) & 15];
+                l[k++] = '\n'; l[k] = 0;
+                term_puts(l);
+                if (++n >= 40) return;
+                if (fn == 0 && !(pci_read32(bus, dev, 0, 0xC) & 0x800000)) break;
+            }
+}
+
 static void cmd_ifconfig(void)
 {
     net_info_t i;
     char b[24];
     net_info(&i);
-    if (!i.present) { term_puts("ifconfig: no network adapter found\n"); return; }
+    if (!i.present) { term_puts("ifconfig: no network adapter found (supported: e1000, JMicron JMC250/260)\n"); return; }
     term_cputs("en0", TC_ACCENT); term_puts(i.up ? ": flags=UP,RUNNING\n" : ": flags=UP (waiting for DHCP)\n");
     term_puts("    ether ");
     for (int k = 0; k < 6; k++) {
@@ -603,6 +653,13 @@ static void cmd_ifconfig(void)
         if (k < 5) term_putc(':');
     }
     term_putc('\n');
+    {
+        static const char *const ds[] = { "idle", "sending DISCOVER, no answer yet", "got offer, sending REQUEST", "bound" };
+        term_puts("    dhcp: "); term_puts(ds[net_dhcp_state() & 3]); term_putc('\n');
+        if (net_stats_hook) { char n[12]; u32 rx, tx, tf; int link; net_stats_hook(&rx, &tx, &tf, &link);
+            term_puts("    link: "); term_puts(link ? "up" : "DOWN"); term_puts("   frames: tx "); u_put(n, (int)tx); term_puts(n);
+            term_puts(" rx "); u_put(n, (int)rx); term_puts(n); term_puts(" txfail "); u_put(n, (int)tf); term_puts(n); term_putc('\n'); }
+    }
     if (!i.up) return;
     net_ip_fmt(i.ip, b);   term_puts("    inet "); term_puts(b);
     net_ip_fmt(i.mask, b); term_puts("  netmask "); term_puts(b); term_putc('\n');
@@ -660,7 +717,7 @@ static const cmd_info_t cmd_table[] = {
     { "free", "free" }, { "df", "df" }, { "ps", "ps" }, { "top", "top" }, { "kill", "kill name|pid" },
     { "whoami", "whoami" }, { "hostname", "hostname" }, { "sw_vers", "sw_vers" }, { "history", "history" },
     { "open", "open files|terminal|settings|snake|about|launchpad|mission" }, { "snake", "snake" },
-    { "ifconfig", "ifconfig" }, { "ping", "ping [-c N] host  (Ctrl+C stops)" }, { "nslookup", "nslookup host" }, { "curl", "curl [-i] http://host/path  (Ctrl+C stops; no HTTPS yet)" },
+    { "disks", "disks  (SATA disks and their partitions, read only)" }, { "install", "install  (graphical installer: erases a disk!)" }, { "lock", "lock  (show the login screen)" }, { "lspci", "lspci  (list PCI devices: vendor:device class)" }, { "nicinfo", "nicinfo  (JMicron Ethernet diagnostics)" }, { "audio", "audio [test]  (HD Audio status; test plays the startup sound)" }, { "ifconfig", "ifconfig" }, { "ping", "ping [-c N] host  (Ctrl+C stops)" }, { "nslookup", "nslookup host" }, { "curl", "curl [-i] http://host/path  (Ctrl+C stops; no HTTPS yet)" },
     { "files", "files" }, { "wallpaper", "wallpaper N" }, { "theme", "theme light|dark" },
     { "accent", "accent purple|blue|green|..." }, { "dock", "dock hide off|auto|smart | zoom N | magnify on|off" },
     { "notify", "notify text" }, { "spotlight", "spotlight" }, { "cmatrix", "cmatrix (q to quit)" }, { "cowsay", "cowsay text" }, { "fortune", "fortune" },
@@ -732,6 +789,11 @@ static int term_ext_cmd(const char *cmd, char *arg)
     else if (s_eq(cmd, "kill") || s_eq(cmd, "killall")) cmd_kill(arg);
     else if (s_eq(cmd, "open")) cmd_open(arg);
     else if (s_eq(cmd, "ifconfig")) cmd_ifconfig();
+    else if (s_eq(cmd, "lspci")) cmd_lspci();
+    else if (s_eq(cmd, "nicinfo")) { char nb[300]; jme_diag(nb, (int)sizeof nb); term_puts(nb); }
+    else if (s_eq(cmd, "audio")) { char ab[160]; hda_diag(ab, (int)sizeof ab); term_puts(ab[0] ? ab : "HD Audio: driver not linked\n"); if (s_eq(arg, "test")) hda_play_chime(); }
+    else if (s_eq(cmd, "disks")) cmd_disks();
+    else if (s_eq(cmd, "install")) { installer_open(); scene_dirty = 1; }
     else if (s_eq(cmd, "ping")) cmd_ping(arg);
     else if (s_eq(cmd, "nslookup")) cmd_nslookup(arg);
     else if (s_eq(cmd, "curl") || s_eq(cmd, "wget")) cmd_curl(arg);
@@ -744,8 +806,9 @@ static int term_ext_cmd(const char *cmd, char *arg)
     else if (s_eq(cmd, "notify")) { if (*arg) notify("Terminal", arg); else term_puts("usage: notify text\n"); }
     else if (s_eq(cmd, "spotlight")) sp_toggle();
     else if (s_eq(cmd, "history")) term_hist_print();
-    else if (s_eq(cmd, "whoami")) term_puts("endix\n");
-    else if (s_eq(cmd, "hostname")) term_puts("endix-v8\n");
+    else if (s_eq(cmd, "whoami")) { term_puts(who_user); term_putc('\n'); }
+    else if (s_eq(cmd, "hostname")) { term_puts(who_host); term_putc('\n'); }
+    else if (s_eq(cmd, "lock")) { if (login_relock()) scene_dirty = 1; else term_puts("lock: no installed user (install EndixOS first)\n"); }
     else if (s_eq(cmd, "sw_vers")) {
         term_puts("ProductName:    EndixOS\nProductVersion: " ENDIX_VERSION "\nBuildVersion:   i686\n");
     } else if (s_eq(cmd, "free")) {

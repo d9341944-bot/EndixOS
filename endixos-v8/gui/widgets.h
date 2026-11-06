@@ -20,5 +20,10 @@ int  widgets_edit_active(void);
 int  widgets_edit_press(i32 x, i32 y);
 int  widgets_get_mask(void);          /* какие виджеты включены, по биту на виджет */
 void widgets_set_mask(int m);
+void widgets_get_pos(u8 out[8]);      /* места виджетов (x/8, y/8) для сохранения */
+void widgets_set_pos(const u8 in[8]);
+int  widgets_edit_drag(i32 x, i32 y, int down);   /* перетаскивание в режиме редактирования; 1 - перерисовать */
+int  widgets_dragging(void);
+int  widgets_pos_dirty(void);         /* 1 один раз после того, как виджет переставили */
 
 #endif

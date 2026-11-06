@@ -21,6 +21,16 @@ void net_info(net_info_t *i);
 int  net_ping(const char *host, int count);          /* 0 - запущено; -1 - занято или нет сети (причина в логе) */
 int  net_nslookup(const char *host);
 int  net_http_get(const char *url, int show_headers);   /* http://host[:port]/path; тело и ошибки идут в лог */
+
+/* Загрузка страницы в память (для браузера). Тело - в buf (всегда с нулём в конце), до cap-1 байт.
+ * Перенаправления http:// выполняются сами; редирект на https: ошибка. */
+typedef struct { int state; int status; u32 len; int truncated; int ctype; char err[110]; char url[256]; } net_fetch_t;
+enum { NF_IDLE, NF_LOADING, NF_DONE, NF_ERROR };      /* ctype: 0 html, 1 text/plain, 2 другое (картинка, файл) */
+int  net_fetch(const char *url, u8 *buf, u32 cap);
+void net_fetch_info(net_fetch_t *f);
+void net_fetch_abort(void);
+void net_url_join(const char *base, const char *ref, char *out, u32 cap);
+
 int  net_job_active(void);
 void net_stop(void);                                 /* прервать ping (Ctrl+C), выводит итог */
 
@@ -30,6 +40,7 @@ int  net_resolve(const char *host, net_resolve_cb done, void *arg);   /* 0 - з�
 
 u32  net_ip_parse(const char *s, int *ok);
 void net_ip_fmt(u32 ip, char *buf);                  /* "a.b.c.d", до 16 байт */
+int  net_dhcp_state(void);
 int  net_changed(void);                              /* 1, если состояние (адрес, связь) изменилось с прошлого вызова */
 
 #endif

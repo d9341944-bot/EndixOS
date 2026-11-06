@@ -21,5 +21,6 @@ int  files_click(i32 rx, i32 ry, u32 ticks);
 
 /* Клавиша: стрелки, Enter (открыть), F2 (переименовать), Delete, Backspace (наверх). */
 int  files_key(i32 key);
+int  files_wheel(i32 d);                           /* колесо мыши: d > 0 вверх; 1 - содержимое сдвинулось */
 
 #endif

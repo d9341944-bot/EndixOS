@@ -357,6 +357,41 @@ int fs_remove_tree(int n)
     return fs_remove(n);
 }
 
+int fs_trash(void)
+{
+    int t = fs_lookup(home_node, ".Trash");
+    if (t < 0 || !fs_is_dir(t)) t = fs_mkdir(home_node, ".Trash");
+    return t;
+}
+
+int fs_in_trash(int n)
+{
+    int t = fs_lookup(home_node, ".Trash");
+    for (int p = n; p >= 0 && t >= 0; p = nodes[p].parent)
+        if (p == t) return 1;
+    return 0;
+}
+
+int fs_trash_put(int n)
+{
+    if (!fs_valid(n)) return FS_ENOENT;
+    int t = fs_trash();
+    if (t < 0) return t;
+    if (n == t) return FS_EPERM;
+    char nm[FS_NAME_MAX + 8];
+    fs_unique_name(t, nodes[n].name, nm);
+    return fs_move(n, t, nm);
+}
+
+int fs_trash_empty(void)
+{
+    int t = fs_lookup(home_node, ".Trash"), c = 0;
+    if (t < 0) return 0;
+    for (int i = 0; i < FS_MAX_NODES; i++)
+        if (fs_valid(i) && nodes[i].parent == t) { fs_remove_tree(i); c++; }
+    return c;
+}
+
 int fs_move(int n, int new_parent, const char *new_name)
 {
     if (!fs_valid(n))
@@ -456,6 +491,7 @@ void fs_init(void)
     fs_mkdir(home_node, "Downloads");
     fs_mkdir(home_node, "Pictures");
     fs_mkdir(home_node, "Music");
+    fs_mkdir(home_node, ".Trash");
 
     put_file(documents, "readme.txt",
         "Welcome to EndixOS 8!\n"
@@ -481,7 +517,7 @@ void fs_init(void)
         "[x] Snake and Files\n"
         "[ ] Launchpad\n"
         "[ ] real disk\n");
-    put_file(desktop, "hello.txt", "Hello from EndixOS!\n");
+    put_file(desktop, "Install EndixOS", "#install\n");        /* значок установщика (рисуется особо, открывает установщик) */
     put_file(etc, "os-release", "NAME=EndixOS\nVERSION=8.0\nARCH=i686\n");
     put_file(etc, "hostname", "endix\n");
 }

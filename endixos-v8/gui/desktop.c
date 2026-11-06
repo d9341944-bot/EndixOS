@@ -6,6 +6,7 @@
 #include "theme.h"
 #include "anim.h"
 #include "widgets.h"
+#include "logo.h"
 #include "../kernel/fs.h"
 
 #define CELL_W 92
@@ -35,6 +36,24 @@ static int items(int *out)
     return d < 0 ? 0 : fs_list(d, out, MAXI);
 }
 
+int desktop_is_installer(int node)
+{
+    const u8 *d = fs_data(node);
+    return node >= 0 && !fs_is_dir(node) && fs_size(node) >= 8 && d && d[0] == '#' && d[1] == 'i' && d[2] == 'n' && d[3] == 's' && d[4] == 't';
+}
+
+static void label_line(i32 cx, i32 y, const char *buf, int selected)
+{
+    i32 tw = font_width(buf, FONT_REGULAR);
+    if (selected) {
+        fb_fill_round_rect(cx - tw / 2 - 6, y - 2, tw + 12, 20, 7, theme_accent(), 255);
+        font_draw(cx - tw / 2, y, buf, RGB(255, 255, 255), FONT_REGULAR);
+    } else {
+        font_draw(cx - tw / 2 + 1, y + 1, buf, RGB(0, 0, 0), FONT_REGULAR);
+        font_draw(cx - tw / 2, y, buf, RGB(255, 255, 255), FONT_REGULAR);
+    }
+}
+
 static void label(i32 cx, i32 y, int node, int selected)
 {
     char buf[48];
@@ -44,6 +63,16 @@ static void label(i32 cx, i32 y, int node, int selected)
     buf[n] = 0;
     i32 maxw = CELL_W - 10;
     if (font_width(buf, FONT_REGULAR) > maxw) {
+        int sp = -1;                                           /* длинное имя с пробелом: две строки */
+        for (int i = 0; i < n; i++) if (buf[i] == ' ') { sp = i; break; }
+        if (sp > 0 && font_width(buf + sp + 1, FONT_REGULAR) <= maxw) {
+            char l1[48];
+            for (int i = 0; i < sp; i++) l1[i] = buf[i];
+            l1[sp] = 0;
+            label_line(cx, y, l1, selected);
+            label_line(cx, y + 18, buf + sp + 1, selected);
+            return;
+        }
         while (n > 1 && font_width(buf, FONT_REGULAR) + font_width("...", FONT_REGULAR) > maxw) {
             n--;
             while (n > 1 && ((u8)buf[n] & 0xC0) == 0x80) n--;
@@ -51,14 +80,18 @@ static void label(i32 cx, i32 y, int node, int selected)
         }
         buf[n] = '.'; buf[n + 1] = '.'; buf[n + 2] = '.'; buf[n + 3] = 0;
     }
-    i32 tw = font_width(buf, FONT_REGULAR);
-    if (selected) {
-        fb_fill_round_rect(cx - tw / 2 - 6, y - 2, tw + 12, 20, 7, theme_accent(), 255);
-        font_draw(cx - tw / 2, y, buf, RGB(255, 255, 255), FONT_REGULAR);
-    } else {
-        font_draw(cx - tw / 2 + 1, y + 1, buf, RGB(0, 0, 0), FONT_REGULAR);
-        font_draw(cx - tw / 2, y, buf, RGB(255, 255, 255), FONT_REGULAR);
-    }
+    label_line(cx, y, buf, selected);
+}
+
+static void install_icon(i32 x, i32 y, i32 sz)
+{
+    u32 acc = theme_accent();
+    fb_fill_round_rect(x, y, sz, sz, sz * 2 / 9, acc, 255);
+    logo_draw(x + sz / 2 - sz / 5, y + sz / 5, sz * 2 / 5, RGB(255, 255, 255));
+    i32 bx = x + sz - 14, by = y + sz - 14;                      /* значок "загрузить": стрелка вниз в круге */
+    fb_fill_circle(bx, by, 11, RGB(255, 255, 255));
+    fb_fill_rect(bx - 1, by - 6, 3, 8, acc);
+    for (int k = 0; k < 4; k++) fb_fill_rect(bx - 3 + k, by + 1 + k, 7 - 2 * k, 1, acc);
 }
 
 void desktop_draw(i32 W, i32 H)
@@ -72,7 +105,8 @@ void desktop_draw(i32 W, i32 H)
         int s = list[k] == sel_node;
         if (s)
             fb_fill_round_rect(cx - ICON_PX / 2 - 6, y - 2, ICON_PX + 12, ICON_PX + 8, 10, RGB(255, 255, 255), 60);
-        icon_draw(fs_is_dir(list[k]) ? ICON_DESK_FOLDER : ICON_DESK_FILE, cx - ICON_PX / 2, y + 2, ICON_PX);
+        if (desktop_is_installer(list[k])) install_icon(cx - ICON_PX / 2, y + 2, ICON_PX);
+        else icon_draw(fs_is_dir(list[k]) ? ICON_DESK_FOLDER : ICON_DESK_FILE, cx - ICON_PX / 2, y + 2, ICON_PX);
         label(cx, y + ICON_PX + 8, list[k], s);
     }
 }
@@ -99,6 +133,21 @@ int desktop_press(i32 px, i32 py, u32 ticks)
 }
 
 void desktop_deselect(void) { sel_node = -1; }
+int  desktop_selected(void) { return sel_node; }
+void desktop_select(int node) { sel_node = node; last_node = -1; }
+
+int desktop_icon_at(i32 px, i32 py)
+{
+    int list[MAXI];
+    int n = items(list);
+    i32 W = (i32)fb_width(), H = (i32)fb_height();
+    for (int k = 0; k < n; k++) {
+        i32 x, y;
+        cell_pos(k, W, H, &x, &y);
+        if (px >= x + 6 && px < x + CELL_W - 6 && py >= y && py < y + ICON_PX + 28) return list[k];
+    }
+    return -1;
+}
 
 /* ---------- контекстное меню ---------- */
 
@@ -107,7 +156,7 @@ void desktop_deselect(void) { sel_node = -1; }
 #define CM_ROW 26
 #define CM_MAX 6
 static const char *cm_text[CM_MAX];
-static int cm_act[CM_MAX], cm_n, cm_sep, cm_widx = -1;       /* cm_sep: бит i - разделитель над пунктом i */
+static int cm_act[CM_MAX], cm_n, cm_sep, cm_widx = -1, cm_node = -1;       /* cm_sep: бит i - разделитель над пунктом i */
 static int cm_open, cm_v, cm_x, cm_y, cm_hover = -1;
 
 static int nsep(int upto) { int c = 0; for (int k = 1; k <= upto; k++) if (cm_sep >> k & 1) c++; return c; }
@@ -118,7 +167,12 @@ int desktop_ctx_widget(void) { return cm_widx; }
 static void set_items(int widget)
 {
     cm_n = 0;
-    if (!widget) {
+    if (widget == 2) {
+        cm_text[0] = desktop_is_installer(cm_node) ? "Install EndixOS" : "Open"; cm_act[0] = DK_ACT_OPENICON;
+        cm_text[1] = "Delete"; cm_act[1] = DK_ACT_DELETEICON;
+        cm_n = 2;
+        cm_sep = 1 << 1;
+    } else if (!widget) {
         static const char *const tx[5] = { "New Folder", "Change Wallpaper...", "Appearance...", "Liquid Glass...", "Edit Widgets..." };
         static const int ac[5] = { DK_ACT_NEWFOLDER, DK_ACT_WALLPAPER, DK_ACT_APPEAR, DK_ACT_GLASS, DK_ACT_EDITWIDGETS };
         for (int i = 0; i < 5; i++) { cm_text[i] = tx[i]; cm_act[i] = ac[i]; }
@@ -146,6 +200,8 @@ static void ctx_open(i32 x, i32 y, int widget, int widx)
 }
 
 void desktop_ctx_open(i32 x, i32 y) { ctx_open(x, y, 0, -1); }
+void desktop_ctx_open_icon(i32 x, i32 y, int node) { cm_node = node; ctx_open(x, y, 2, -1); }
+int desktop_ctx_node(void) { return cm_node; }
 void desktop_ctx_open_widget(i32 x, i32 y, int idx) { ctx_open(x, y, 1, idx); }
 
 void desktop_ctx_close(void) { cm_open = 0; cm_hover = -1; }

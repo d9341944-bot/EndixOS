@@ -1,6 +1,8 @@
 /* Процедурные обои: трёхцветный градиент вдоль заданного направления + мягкое свечение. */
 #include "wallpaper.h"
 #include "fb.h"
+#include "photos.h"
+#include "scenery.h"
 
 typedef struct {
     const char *name;
@@ -414,11 +416,17 @@ static const scene_t scenes[WALL_COUNT - GRAD_COUNT] = {
 
 const char *wallpaper_name(int id)
 {
+    if (id >= WALL_PHOTO0) return photos_name(id - WALL_PHOTO0);
+    if (id >= WALL_COUNT) return scenery_name(id - WALL_COUNT);
     return id < GRAD_COUNT ? wps[id].name : scenes[id - GRAD_COUNT].name;
 }
 
 void wallpaper_paint(int id, u32 *dst, u32 w, u32 h)
 {
+    if (id >= WALL_COUNT) {
+        if (id >= WALL_PHOTO0 ? photos_paint(id - WALL_PHOTO0, dst, w, h) : scenery_paint(id - WALL_COUNT, dst, w, h)) return;
+        id = 0;                                   /* файл исчез или не читается: первые обои */
+    }
     if (id < GRAD_COUNT) {
         paint_gradient(id, dst, w, h);
         return;

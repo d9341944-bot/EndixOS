@@ -15,7 +15,7 @@
 #define STATUS_H  22
 #define CELL_W    84
 #define CELL_H    92
-#define WIN_RADIUS 10
+#define WIN_RADIUS 14
 #define PREV_COLS 26
 #define PREV_ROWS 10
 #define DOUBLE_CLICK_TICKS 40
@@ -44,9 +44,10 @@ static const struct { const char *label; const char *path; u32 color; } side[] =
     { "Pictures",  "~/Pictures",  RGB(255, 70, 120) },
     { "Music",     "~/Music",     RGB(230, 60, 60)  },
     { "EndixOS",   "/",           RGB(110, 115, 125) },
+    { "Trash",     "~/.Trash",    RGB(110, 115, 125) },
 };
 #define NSIDE ((int)(sizeof(side) / sizeof(side[0])))
-static const u8 side_glyph[] = { ICON_SIDE_HOME, ICON_SIDE_DESKTOP, ICON_SIDE_DOC, ICON_SIDE_DOWN, ICON_SIDE_PHOTO, ICON_SIDE_MUSIC, ICON_SIDE_DISK };
+static const u8 side_glyph[] = { ICON_SIDE_HOME, ICON_SIDE_DESKTOP, ICON_SIDE_DOC, ICON_SIDE_DOWN, ICON_SIDE_PHOTO, ICON_SIDE_MUSIC, ICON_SIDE_DISK, ICON_TRASH };
 #define SIDE_LOCATIONS 6           /* с этого пункта начинается раздел Locations */
 
 /* ---------- строки ---------- */
@@ -139,9 +140,14 @@ static const char *kind_of(int node)
 
 #define MAIN_W (fw_ - SIDE_W - PREV_W)
 
-static int ncols(void) { int c = MAIN_W / CELL_W; return c < 1 ? 1 : c; }
-static int nrows(void) { int r = (fh_ - TOOL_H - ACT_H - STATUS_H - 8) / CELL_H; return r < 1 ? 1 : r; }
-static i32 grid_x(void) { return SIDE_W + (MAIN_W - ncols() * CELL_W) / 2; }
+#define ROW_H 26
+static int listv;                                       /* 1 - вид списком */
+static i32 cell_w(void) { return listv ? MAIN_W : CELL_W; }
+static i32 cell_h(void) { return listv ? ROW_H : CELL_H; }
+static int ncols(void) { int c = MAIN_W / cell_w(); return c < 1 ? 1 : c; }
+static int nrows(void) { int r = (fh_ - TOOL_H - ACT_H - STATUS_H - 8) / cell_h(); return r < 1 ? 1 : r; }
+static i32 grid_x(void) { return SIDE_W + (MAIN_W - ncols() * cell_w()) / 2; }
+#define VIEW_X (SIDE_W + MAIN_W - 70)                   /* переключатель вида: значки / список */
 static i32 grid_y(void) { return TOOL_H + ACT_H + 6; }
 
 static int in_rect(i32 px, i32 py, i32 x, i32 y, i32 w, i32 h)
@@ -150,8 +156,8 @@ static int in_rect(i32 px, i32 py, i32 x, i32 y, i32 w, i32 h)
 }
 
 enum { B_FOLDER, B_FILE, B_RENAME, B_DELETE, B_COUNT };
-static const char *const btn_label[B_COUNT] = { "New Folder", "New File", "Rename", "Delete" };
-static const i32 btn_w[B_COUNT] = { 96, 80, 72, 68 };
+static const char *const btn_label[B_COUNT] = { "New Folder", "New File", "Rename", "Move to Trash" };
+static const i32 btn_w[B_COUNT] = { 96, 80, 72, 108 };
 
 static i32 btn_x(int i)
 {
@@ -172,6 +178,10 @@ static void refresh(void)
     if (cur < 0 || !fs_is_dir(cur))        /* папку удалили, например из терминала */
         cur = fs_home();
     nitems = fs_list(cur, items, FS_MAX_NODES);
+    int k = 0;                                           /* скрытые файлы (.Trash) не показываем */
+    for (int i = 0; i < nitems; i++)
+        if (fs_name(items[i])[0] != '.') items[k++] = items[i];
+    nitems = k;
     if (sel >= 0) {
         int found = 0;
         for (int i = 0; i < nitems; i++)
@@ -317,7 +327,7 @@ static void delete_selected(void)
         return;
     char buf[48], *p;
     int idx = index_of(sel);
-    p = put_str(buf, "Deleted ");
+    p = put_str(buf, fs_in_trash(sel) ? "Deleted " : "Trashed ");
     int l = 0;
     const char *n = fs_name(sel);
     while (n[l] && l < 30)
@@ -325,7 +335,8 @@ static void delete_selected(void)
     *p = 0;
 
     renaming = 0;
-    if (fs_remove_tree(sel) != 0) {
+    int to_trash = !fs_in_trash(sel);
+    if ((to_trash ? fs_trash_put(sel) : fs_remove_tree(sel)) != 0) {
         set_msg("Cannot delete this item");
         return;
     }
@@ -338,23 +349,9 @@ static void delete_selected(void)
 
 /* ---------- иконки ---------- */
 
-#define S(n) ((n) * s / 48)
-
 static void draw_icon(int is_dir, i32 x, i32 y, i32 s)
 {
-    if (is_dir) {
-        u32 back = RGB(58, 128, 228), front = RGB(92, 170, 250);
-        fb_fill_round_rect(x + S(3), y + S(7), S(20), S(12), S(4), back, 255);
-        fb_fill_round_rect(x + S(3), y + S(11), S(42), S(30), S(5), back, 255);
-        fb_fill_round_rect(x + S(3), y + S(17), S(42), S(26), S(5), front, 255);
-        fb_blend_rect(x + S(5), y + S(18), S(38), 1, RGB(255, 255, 255), 90);
-    } else {
-        fb_fill_round_rect(x + S(9), y + S(2), S(31), S(44), S(5), RGB(190, 190, 198), 255);
-        fb_fill_round_rect(x + S(10), y + S(3), S(29), S(42), S(4), RGB(255, 255, 255), 255);
-        fb_fill_rect(x + S(30), y + S(3), S(9), S(9), RGB(222, 222, 228));      /* загнутый угол */
-        for (int i = 0; i < 5; i++)
-            fb_fill_rect(x + S(14), y + S(17 + i * 5), S(i == 4 ? 12 : 21), 2, RGB(170, 170, 180));
-    }
+    icon_draw(is_dir ? ICON_DESK_FOLDER : ICON_DESK_FILE, x, y, s);     /* те же значки, что на рабочем столе */
 }
 
 /* ---------- отрисовка ---------- */
@@ -402,7 +399,16 @@ static void draw_toolbar(i32 x, i32 y)
     fs_path(cur, path, sizeof(path));
     const char *title = cur == fs_root() ? "EndixOS" : fs_name(cur);
     i32 tx = font_draw(x + SIDE_W + 84, y + 10, title, t->text, FONT_BOLD);
-    font_draw(tx + 12, y + 11, path, t->sub, FONT_REGULAR);
+    if (tx + 12 + font_width(path, FONT_REGULAR) < x + VIEW_X - 8)
+        font_draw(tx + 12, y + 11, path, t->sub, FONT_REGULAR);
+
+    /* переключатель вида: сегментная кнопка со значками */
+    ui_button(x + VIEW_X, y + 7, 62, 24, "", 1, 0);
+    fb_fill_round_rect(listv ? x + VIEW_X + 32 : x + VIEW_X + 2, y + 9, 28, 20, 6, theme_accent(), 70);
+    for (int k = 0; k < 4; k++)                          /* значки: 2x2 квадрата */
+        fb_fill_round_rect(x + VIEW_X + 10 + (k & 1) * 7, y + 14 + (k >> 1) * 7, 5, 5, 1, t->text, 255);
+    for (int k = 0; k < 3; k++)                          /* список: три полоски */
+        fb_fill_round_rect(x + VIEW_X + 40, y + 13 + k * 5, 12, 2, 1, t->text, 255);
 
     for (int i = 0; i < B_COUNT; i++) {
         int enabled = (i < B_RENAME) || sel >= 0;
@@ -424,8 +430,40 @@ static void draw_grid(i32 x, i32 y)
 
     for (int i = scroll * cols; i < nitems && i < (scroll + rows) * cols; i++) {
         int c = i % cols, r = i / cols - scroll;
-        i32 cx = gx + c * CELL_W, cy = gy + r * CELL_H;
+        i32 cx = gx + c * cell_w(), cy = gy + r * cell_h();
         int node = items[i];
+
+        if (listv) {                                     /* строка списка: имя, вид, размер */
+            i32 rw = MAIN_W - 16;
+            if (node == sel)
+                fb_fill_round_rect(gx + 8, cy, rw, ROW_H - 2, 7, theme_accent(), 255);
+            else if (i & 1)
+                fb_fill_round_rect(gx + 8, cy, rw, ROW_H - 2, 7, theme_is_dark() ? RGB(255, 255, 255) : RGB(0, 0, 0), theme_is_dark() ? 10 : 8);
+            u32 ink = node == sel ? RGB(255, 255, 255) : t->text, ink2 = node == sel ? RGB(235, 235, 245) : t->sub;
+            draw_icon(fs_is_dir(node), gx + 16, cy + 2, 20);
+            i32 nx = gx + 44;
+            if (renaming && node == sel) {
+                const char *vis = rbuf;
+                i32 bw = 190;
+                while (font_width(vis, FONT_REGULAR) > bw - 10 && *vis) vis++;
+                i32 tw = font_width(vis, FONT_REGULAR);
+                fb_fill_round_rect(nx - 4, cy, bw + 2, ROW_H - 2, 6, theme_accent(), 255);
+                fb_fill_round_rect(nx - 3, cy + 1, bw, ROW_H - 4, 5, t->card, 255);
+                if (rfresh) { fb_fill_rect(nx, cy + 4, tw + 2, 16, theme_accent()); font_draw(nx + 1, cy + 4, vis, RGB(255, 255, 255), FONT_REGULAR); }
+                else { font_draw(nx + 1, cy + 4, vis, t->text, FONT_REGULAR); fb_fill_rect(nx + 2 + tw, cy + 5, 1, 14, t->text); }
+            } else {
+                char label[FS_NAME_MAX + 4];
+                fit_text(label, fs_name(node), MAIN_W > 360 ? MAIN_W - 250 : MAIN_W - 140);
+                font_draw(nx, cy + 4, label, ink, FONT_REGULAR);
+            }
+            char sz[32];
+            if (fs_is_dir(node)) { char *q = put_num(sz, (u32)fs_count(node)); put_str(q, fs_count(node) == 1 ? " item" : " items"); }
+            else describe_size(sz, fs_size(node));
+            font_draw(gx + 8 + rw - 10 - font_width(sz, FONT_REGULAR), cy + 4, sz, ink2, FONT_REGULAR);
+            if (MAIN_W > 360)
+                font_draw(gx + 8 + rw - 120 - 30, cy + 4, kind_of(node), ink2, FONT_REGULAR);
+            continue;
+        }
 
         if (node == sel)
             fb_fill_round_rect(cx + 8, cy + 4, CELL_W - 16, 56, 8, theme_is_dark() ? RGB(255, 255, 255) : RGB(0, 0, 0),
@@ -461,7 +499,7 @@ static void draw_grid(i32 x, i32 y)
     /* полоса прокрутки, если элементов больше, чем помещается */
     int total_rows = (nitems + cols - 1) / cols;
     if (total_rows > rows) {
-        i32 th = rows * CELL_H, ty = gy;
+        i32 th = rows * cell_h(), ty = gy;
         i32 thumb = th * rows / total_rows;
         if (thumb < 24)
             thumb = 24;
@@ -592,7 +630,7 @@ static int grid_item_at(i32 rx, i32 ry)
     i32 gx = grid_x(), gy = grid_y();
     if (rx < gx || ry < gy)
         return -1;
-    int c = (rx - gx) / CELL_W, r = (ry - gy) / CELL_H;
+    int c = (rx - gx) / cell_w(), r = (ry - gy) / cell_h();
     if (c >= ncols() || r >= nrows())
         return -1;
     int idx = (scroll + r) * ncols() + c;
@@ -616,6 +654,11 @@ int files_click(i32 rx, i32 ry, u32 ticks)
         return 0;
     }
 
+    if (ry < TOOL_H && in_rect(rx, ry, VIEW_X, 7, 62, 24)) {     /* значки / список */
+        int want = rx >= VIEW_X + 31;
+        if (want != listv) { listv = want; scroll = 0; if (sel >= 0) ensure_visible(); }
+        return 1;
+    }
     if (ry < TOOL_H) {                                   /* Back / Forward */
         if (in_rect(rx, ry, BACK_X, 7, 26, 24)) { go_history(-1); return 1; }
         if (in_rect(rx, ry, FWD_X, 7, 26, 24))  { go_history(1);  return 1; }
@@ -719,6 +762,17 @@ int files_key(i32 key)
     default:
         return 0;
     }
+}
+
+int files_wheel(i32 d)
+{
+    int cols = ncols(), rows = nrows();
+    int total = (nitems + cols - 1) / cols, max = total > rows ? total - rows : 0;
+    int ns = scroll - (d > 0 ? 1 : -1) * (listv ? 3 : 1);
+    ns = ns < 0 ? 0 : ns > max ? max : ns;
+    if (ns == scroll) return 0;
+    scroll = ns;
+    return 1;
 }
 
 void files_new_folder(void) { make_new(1); }

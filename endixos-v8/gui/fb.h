@@ -3,12 +3,14 @@
 
 #include "../kernel/types.h"
 
-#define FB_MAX_W 1280
-#define FB_MAX_H 1024
+#define FB_MAX_W 1920
+#define FB_MAX_H 1080
 
 /* Цвет: 0x00RRGGBB */
 #define RGB(r, g, b) (((u32)(r) << 16) | ((u32)(g) << 8) | (u32)(b))
 
+int  fb_set_logical_width(u32 lw);       /* растянутая матрица: рисуем шире, на экран сжимаем */
+u32  fb_phys_width(void);
 int  fb_init(u32 addr, u32 pitch, u32 width, u32 height, u32 bpp);
 u32  fb_width(void);
 u32  fb_height(void);

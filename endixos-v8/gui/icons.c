@@ -228,6 +228,24 @@ static void ic_launchpad(u32 *cv)
     }
 }
 
+/* ---- Browser: компас ---- */
+static void ic_browser(u32 *cv)
+{
+    base(cv, C(110, 205, 255), C(20, 110, 235));
+    shp disc = CI(64, 64, 46);
+    fill(cv, &disc, 0, P(C(255, 255, 255), C(214, 232, 255), 255, 18, 110));
+    shp ring = STK(CI(64, 64, 46), 3 * U);
+    fill(cv, &ring, 0, PA(C(30, 110, 240), 110, 0, 18, 110));
+    shp t1 = CA(64, 24, 64, 31, 1), t2 = CA(64, 97, 64, 104, 1), t3 = CA(24, 64, 31, 64, 1), t4 = CA(97, 64, 104, 64, 1);
+    fill(cv, &t1, 0, P(C(60, 130, 235), C(60, 130, 235), 255, 0, 127)); fill(cv, &t2, 0, P(C(60, 130, 235), C(60, 130, 235), 255, 0, 127));
+    fill(cv, &t3, 0, P(C(60, 130, 235), C(60, 130, 235), 255, 0, 127)); fill(cv, &t4, 0, P(C(60, 130, 235), C(60, 130, 235), 255, 0, 127));
+    shp nr = ROT(RR(64, 46, 8, 20, 6), 2, 64, 64), nw = ROT(RR(64, 82, 8, 20, 6), 2, 64, 64);
+    fill(cv, &nw, 0, P(C(150, 160, 178), C(112, 122, 142), 255, 60, 110));
+    fill(cv, &nr, 0, P(C(255, 110, 96), C(232, 40, 44), 255, 20, 70));
+    shp hub = CI(64, 64, 4);
+    fill(cv, &hub, 0, P(WHITE, WHITE, 255, 0, 127));
+}
+
 /* ---- Files: папка ---- */
 static void ic_files(u32 *cv)
 {
@@ -448,6 +466,29 @@ static void ic_desk_file(u32 *cv)
     }
 }
 
+static void ic_trash(u32 *cv, int full)
+{
+    if (full) {
+        shp p1 = ROT(RR(52, 30, 20, 16, 3), 2, 52, 30), p2 = ROT(RR(76, 28, 20, 18, 3), 1, 76, 28);
+        fill(cv, &p1, 0, P(C(255, 255, 255), C(214, 220, 232), 255, 20, 44));
+        fill(cv, &p2, 0, P(C(250, 252, 255), C(200, 208, 224), 255, 18, 46));
+    }
+    SHADOWED({
+        shp body = RR(64, 78, 58, 66, 12);
+        fill(cv, &body, 0, P(C(226, 232, 242), C(150, 160, 180), 255, 46, 112));
+    });
+    shp edge = STK(RR(64, 78, 58, 66, 12), U);
+    fill(cv, &edge, 0, PA(WHITE, 170, 0, 46, 112));
+    shp lid = RR(64, 40, 74, 12, 6), hd = RR(64, 30, 26, 8, 4);
+    fill(cv, &hd, 0, P(C(200, 208, 222), C(150, 160, 180), 255, 24, 38));
+    fill(cv, &lid, 0, P(C(240, 244, 250), C(176, 186, 204), 255, 34, 48));
+    static const i32 sx[3] = { 48, 64, 80 };
+    for (int i = 0; i < 3; i++) {
+        shp l = CA(sx[i], 62, sx[i], 100, 3);
+        fill(cv, &l, 0, SOLID(C(150, 160, 180)));
+    }
+}
+
 void icon_render(int id, u32 *cv, u32 accent, int dark)
 {
     for (int i = 0; i < S * S; i++) cv[i] = 0;
@@ -457,12 +498,15 @@ void icon_render(int id, u32 *cv, u32 accent, int dark)
     case 2: ic_settings(cv); break;
     case 3: ic_snake(cv); break;
     case 4: ic_about(cv, accent, dark); break;
-    case 5: ic_launchpad(cv); break;
+    case 5: ic_browser(cv); break;
+    case 6: ic_launchpad(cv); break;
     case ICON_TILE_WALL: tile_icon(cv, 0); break;
     case ICON_TILE_APPEAR: tile_icon(cv, 1); break;
     case ICON_TILE_GLASS: tile_icon(cv, 2); break;
     case ICON_DESK_FOLDER: ic_desk_folder(cv); break;
     case ICON_DESK_FILE: ic_desk_file(cv); break;
+    case ICON_TRASH: ic_trash(cv, 0); break;
+    case ICON_TRASH_FULL: ic_trash(cv, 1); break;
     default:
         if (id >= ICON_SIDE_HOME && id <= ICON_SIDE_DISK) glyph(cv, id - ICON_SIDE_HOME, accent & 0xFFFFFF);
         break;

@@ -8,7 +8,10 @@ typedef unsigned long long u64;
 typedef signed char        i8;
 typedef signed short       i16;
 typedef signed int         i32;
+typedef signed long long   i64;
+#ifndef ENDIX_HOST_LIBC
 typedef u32                size_t;
+#endif
 
 #define NULL ((void *)0)
 

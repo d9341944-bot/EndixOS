@@ -1,5 +1,15 @@
 /* Оконный менеджер EndixOS: menu bar, окна, Dock, курсор, встроенные приложения. */
 #include "wm.h"
+#include "../drivers/pci.h"
+#include "../drivers/ahci.h"
+__attribute__((weak)) int ahci_init(void) { return 0; }
+__attribute__((weak)) void hda_diag(char *out, int cap) { (void)cap; out[0] = 0; }
+__attribute__((weak)) void hda_play_chime(void) {}
+__attribute__((weak)) void jme_diag(char *out, int cap) { (void)cap; out[0] = 0; }
+__attribute__((weak)) const char *ahci_status(void) { return "n/a"; }
+__attribute__((weak)) const ahci_disk_t *ahci_disk(int i) { (void)i; return 0; }
+__attribute__((weak)) int ahci_read(int d, u32 lba, u32 c, void *b) { (void)d; (void)lba; (void)c; (void)b; return -1; }
+__attribute__((weak)) u32 pci_read32(u32 bus, u32 dev, u32 fn, u32 off) { (void)bus; (void)dev; (void)fn; (void)off; return 0xFFFFFFFFu; }   /* заглушка для тестов на хосте */
 #include "fb.h"
 #include "genie.h"
 #include "anim.h"
@@ -12,18 +22,23 @@
 #include "settings.h"
 #include "wallpaper.h"
 #include "snake.h"
+#include "browser.h"
 #include "files.h"
 #include "desktop.h"
 #include "widgets.h"
 #include "../kernel/fs.h"
 #include "../kernel/net.h"
 #include "../kernel/string.h"
+#include "installer.h"
+#include "../drivers/jme.h"
+#include "../drivers/hda.h"
+#include "login.h"
 
 #define MENUBAR_H 24
 #define TITLE_H   28
-#define WIN_R     10
+#define WIN_R     14
 
-enum { APP_FILES, APP_TERMINAL, APP_SETTINGS, APP_SNAKE, APP_ABOUT, APP_COUNT };
+enum { APP_FILES, APP_TERMINAL, APP_SETTINGS, APP_SNAKE, APP_ABOUT, APP_BROWSER, APP_COUNT };
 
 typedef struct {
     int open;
@@ -33,13 +48,13 @@ typedef struct {
     i32 sx, sy, sw, sh;          /* позиция и размер до разворачивания */
 } window_t;
 
-static const char *const app_name[APP_COUNT]  = { "Files", "Terminal", "Settings", "Snake", "About" };
-static const char *const app_title[APP_COUNT] = { "Files", "Terminal", "Settings", "Snake", "" };
-static const i32 app_w[APP_COUNT] = { FILES_W, 580, 640, 380, 280 };
-static const u8  app_resizable[APP_COUNT] = { 1, 1, 1, 0, 0 };
-static const i32 app_minw[APP_COUNT] = { 560, 320, 640, 0, 0 };
-static const i32 app_minh[APP_COUNT] = { 260 + TITLE_H, 150 + TITLE_H, 520, 0, 0 };
-static const i32 app_h[APP_COUNT] = { FILES_H + TITLE_H, 360, 520, 400, 520 };
+static const char *const app_name[APP_COUNT]  = { "Files", "Terminal", "Settings", "Snake", "About", "Browser" };
+static const char *const app_title[APP_COUNT] = { "Files", "Terminal", "Settings", "Snake", "", "Browser" };
+static const i32 app_w[APP_COUNT] = { FILES_W, 580, 640, 380, 280, BROWSER_W };
+static const u8  app_resizable[APP_COUNT] = { 1, 1, 1, 0, 0, 1 };
+static const i32 app_minw[APP_COUNT] = { 560, 320, 640, 0, 0, 420 };
+static const i32 app_minh[APP_COUNT] = { 260 + TITLE_H, 150 + TITLE_H, 520, 0, 0, 260 + TITLE_H };
+static const i32 app_h[APP_COUNT] = { FILES_H + TITLE_H, 360, 520, 400, 520, BROWSER_H };
 
 static void open_window(int app);
 static int lp_open;
@@ -48,8 +63,11 @@ static void mc_toggle(void);
 static void lp_close(void);
 static void lp_show(void);
 static void notify(const char *title, const char *text);
+static void notify_icon(const char *title, const char *text, int icon);
+static int xf_tick(u32 dt);
 static int  sp_on;
 static void sp_toggle(void);
+static void lock_now(void);
 static void mc_toggle(void);
 static void close_window(int app);
 static void shutdown_now(void);
@@ -89,6 +107,8 @@ static u32       gn_t0;
 static int       booting = 1;               /* стартовые окна без анимации */
 static i32       mn_v, cc_v, lp_v;          /* плавность меню, Control Center, Launchpad: 0..1024 */
 static int       mn_last;                   /* меню, которое рисуется, пока гаснет */
+static i32       lift_v, lbl_v;             /* "приподнятое" перетаскиваемое окно; появление подписи в Dock (0..1024) */
+static int       lift_app = -1, lbl_id = -1;
 static i32       dk_mag_v, dk_cx16;         /* плавное увеличение Dock и сглаженный x курсора (1/16 пикселя) */
 static u32       an_last;
 static int       ma_app = -1;               /* окно, которое плавно разворачивается или возвращается */
@@ -816,6 +836,7 @@ static int term_fs_cmd(const char *cmd, char *args)
     return 0;
 }
 
+static char who_user[16] = "endix", who_host[32] = "endix-v8";
 #include "termcmd.inc"
 
 static void term_run_cmd(char *line)
@@ -836,7 +857,10 @@ static void term_run_cmd(char *line)
         return;
 
     char buf[96];
-    if (s_eq(line, "snake")) {
+    if (s_eq(line, "browser")) {
+        open_window(APP_BROWSER);
+        if (*arg) browser_open(arg);
+    } else if (s_eq(line, "snake")) {
         open_window(APP_SNAKE);
     } else if (s_eq(line, "files")) {
         open_window(APP_FILES);
@@ -1267,8 +1291,11 @@ static void open_window(int app)
     i32 off = 30 * (nz % 5);
     w->w = app_w[app];
     w->h = app_h[app];
+    if (w->w > W - 16) w->w = W - 16;                       /* маленький экран (нетбук): окно не шире экрана */
+    if (w->h > H - MENUBAR_H - 70) w->h = H - MENUBAR_H - 70;
     w->x = (W - w->w) / 2 - 60 + off;
     w->y = MENUBAR_H + 40 + off;
+    if (w->x + w->w > W - 8) w->x = W - 8 - w->w;
     if (w->x < 8) w->x = 8;
     if (w->y + w->h > H - 90) w->y = H - 90 - w->h;
     if (w->y < MENUBAR_H + 4) w->y = MENUBAR_H + 4;
@@ -1384,8 +1411,16 @@ static void content_origin(int app, i32 *ox, i32 *oy)
 #define DOCK_ICON 52
 #define DOCK_GAP  8
 #define DOCK_PAD  10
+/* Удаление значка с рабочего стола: в Корзину; то, что уже в Корзине, удаляется насовсем. */
+static void trash_or_remove(int n)
+{
+    if (fs_in_trash(n) || fs_trash_put(n) != 0) fs_remove_tree(n);
+}
+
 #define LP_ID      APP_COUNT            /* Launchpad в Dock: id после приложений, слот первый */
-#define DOCK_SLOTS (APP_COUNT + 1)
+#define TRASH_ID   (APP_COUNT + 1)        /* Корзина: последний слот */
+#define DOCK_SLOTS (APP_COUNT + 2)
+#define DSLOT(i)   ((i) == LP_ID ? 0 : (i) == TRASH_ID ? APP_COUNT + 1 : (i) + 1)
 
 static i32 isin_w(i32 p)                       /* период 256, -256..256 */
 {
@@ -1471,7 +1506,7 @@ static void dock_icon_pos(int i, i32 *ix, i32 *iy)
 {
     i32 dx, dy, dw, dh;
     dock_geom(&dx, &dy, &dw, &dh);
-    int slot = i == LP_ID ? 0 : i + 1;
+    int slot = DSLOT(i);
     *ix = dk_x[slot];
     *iy = dy + dh - DOCK_PAD * 3 / 4 - dk_s[slot];     /* значки стоят на одной линии, растут вверх */
 }
@@ -1489,10 +1524,10 @@ static int dock_icon_center(int app, i32 *cx, i32 *cy, i32 *iw)
 
 static int dock_hit(i32 x, i32 y)
 {
-    for (int i = 0; i <= LP_ID; i++) {
+    for (int i = 0; i <= TRASH_ID; i++) {
         i32 ix, iy;
         dock_icon_pos(i, &ix, &iy);
-        i32 sz = dk_s[i == LP_ID ? 0 : i + 1];
+        i32 sz = dk_s[DSLOT(i)];
         if (x >= ix && x < ix + sz && y >= iy && y < iy + sz)
             return i;
     }
@@ -1519,26 +1554,118 @@ static void draw_dock(void)
     const theme_t *t = theme();
     fb_glass(dx, dy, dw, dh, 22, GLASS_ALL, 10, t->dock_tint, theme_is_dark() ? 105 : 90, 40);
 
-    int hover = dock_hit(cur_x, cur_y);
-    for (int i = 0; i <= LP_ID; i++) {
+    {   /* тонкий разделитель перед Корзиной, как в macOS */
+        i32 lx = dk_x[TRASH_ID] - DOCK_GAP / 2, ly0 = dy + 8, ly1 = dy + dh - 8;
+        fb_blend_rect(lx, ly0, 1, ly1 - ly0, theme_is_dark() ? RGB(255, 255, 255) : RGB(0, 0, 0), theme_is_dark() ? 60 : 45);
+    }
+    for (int i = 0; i <= TRASH_ID; i++) {
         i32 ix, iy;
         dock_icon_pos(i, &ix, &iy);
-        int slot = i == LP_ID ? 0 : i + 1;
+        int slot = DSLOT(i);
         i32 sz = dk_s[slot];
         fb_blend_rect(ix + 4, iy + sz - 2, sz - 8, 3, RGB(0, 0, 0), 28);          /* лёгкая тень под значком */
-        icon_draw(i, ix, iy - (i == bn_app ? bounce_height() : 0), sz);
+        icon_draw(i == TRASH_ID ? (fs_count(fs_trash()) > 0 ? ICON_TRASH_FULL : ICON_TRASH) : i, ix, iy - (i == bn_app ? bounce_height() : 0), sz);
         if (i < APP_COUNT && wins[i].open)
             fb_fill_circle(ix + sz / 2, dy + dh - 5, 2, theme_is_dark() ? RGB(235, 235, 240) : RGB(50, 50, 56));
     }
-    if (hover >= 0) {                                /* подпись над значком, как в macOS */
+    if (lbl_id >= 0 && lbl_v > 0) {                  /* подпись над значком: плавно всплывает */
+        int hv = lbl_id;
         i32 ix, iy;
-        dock_icon_pos(hover, &ix, &iy);
-        i32 sz = dk_s[hover == LP_ID ? 0 : hover + 1];
-        const char *nm = hover == LP_ID ? "Launchpad" : app_name[hover];
+        dock_icon_pos(hv, &ix, &iy);
+        i32 sz = dk_s[DSLOT(hv)];
+        const char *nm = hv == LP_ID ? "Launchpad" : hv == TRASH_ID ? "Trash" : app_name[hv];
         i32 tw = font_width(nm, FONT_REGULAR) + 22;
-        i32 tx = ix + sz / 2 - tw / 2, ty = iy - 36;
-        fb_glass(tx, ty, tw, 26, 10, GLASS_ALL, 6, RGB(36, 36, 42), 150, 30);
-        font_draw(tx + 11, ty + 4, nm, RGB(245, 245, 248), FONT_REGULAR);
+        i32 tx = ix + sz / 2 - tw / 2, ty = iy - 36 + (1024 - lbl_v) * 6 / 1024;
+        fb_glass(tx, ty, tw, 26, 10, GLASS_ALL, 6, RGB(36, 36, 42), 150 * lbl_v / 1024, 30);
+        if (lbl_v > 420) font_draw(tx + 11, ty + 4, nm, RGB(245, 245, 248), FONT_REGULAR);
+    }
+}
+
+static void do_empty_trash(void)
+{
+    int n = fs_trash_empty();
+    char b[40], *q = b;
+    char d[12]; int l = 0;
+    for (int v = n; v > 0; v /= 10) d[l++] = (char)('0' + v % 10);
+    if (!l) d[l++] = '0';
+    while (l) *q++ = d[--l];
+    const char *tail = n == 1 ? " item deleted" : " items deleted";
+    while (*tail) *q++ = *tail++;
+    *q = 0;
+    notify_icon("Trash", b, ICON_TRASH);
+    scene_dirty = 1;
+}
+
+/* ---------- меню значка в Dock (правая кнопка) ---------- */
+#define DM_W 164
+#define DM_IH 26
+static int dm_id = -1, dm_n, dm_hover = -1, dm_act[3], dm_x, dm_y;
+static const char *dm_lbl[3];
+static i32 dm_v;
+
+static void dm_close(void) { if (dm_id >= 0) { dm_id = -1; scene_dirty = 1; } }
+
+static void dm_open(int id)
+{
+    dm_n = 0;
+    if (id == TRASH_ID) {
+        dm_lbl[dm_n] = "Open"; dm_act[dm_n++] = 1;
+        dm_lbl[dm_n] = "Empty Trash"; dm_act[dm_n++] = 4;
+    } else if (id == LP_ID || !wins[id].open) {
+        dm_lbl[dm_n] = "Open"; dm_act[dm_n++] = 1;
+    } else {
+        dm_lbl[dm_n] = wins[id].minimized ? "Show" : "Minimize"; dm_act[dm_n++] = wins[id].minimized ? 1 : 2;
+        dm_lbl[dm_n] = "Quit"; dm_act[dm_n++] = 3;
+    }
+    i32 ix, iy, dx, dy, dw, dh;
+    dock_icon_pos(id, &ix, &iy);
+    dock_geom(&dx, &dy, &dw, &dh);
+    i32 sz = dk_s[DSLOT(id)], W = (i32)fb_width();
+    dm_x = ix + sz / 2 - DM_W / 2;
+    if (dm_x < 8) dm_x = 8;
+    if (dm_x + DM_W > W - 8) dm_x = W - 8 - DM_W;
+    dm_y = dy - dm_n * DM_IH - 14;
+    dm_id = id; dm_hover = -1; dm_v = 0;
+    scene_dirty = 1;
+}
+
+static int dm_item_at(i32 x, i32 y)
+{
+    if (dm_id < 0 || x < dm_x || x >= dm_x + DM_W) return -1;
+    i32 r = y - (dm_y + 6);
+    return r >= 0 && r < dm_n * DM_IH ? r / DM_IH : -1;
+}
+
+static void dm_run(int act, int id)
+{
+    switch (act) {
+    case 1:
+        if (id == LP_ID) lp_show();
+        else if (id == TRASH_ID) { open_window(APP_FILES); files_goto(fs_trash()); }
+        else open_window(id);
+        break;
+    case 2: minimize_window(id); break;
+    case 3: close_window(id); break;
+    case 4: do_empty_trash(); break;
+    }
+    scene_dirty = 1;
+}
+
+static void dm_draw(void)
+{
+    if (dm_id < 0 || dm_v <= 0) return;
+    const theme_t *t = theme();
+    i32 h = dm_n * DM_IH + 12, y = dm_y + (1024 - dm_v) * 8 / 1024;
+    for (int k = 0; k < 4; k++)
+        fb_fill_round_rect(dm_x - k, y - k + 4, DM_W + 2 * k, h + 2 * k, 9 + k, RGB(0, 0, 0), 8 * dm_v / 1024);
+    fb_glass(dm_x, y, DM_W, h, 14, GLASS_ALL, 12, theme_is_dark() ? RGB(44, 44, 50) : RGB(244, 244, 247),
+             (theme_is_dark() ? 128 : 124) * dm_v / 1024, 36);
+    if (dm_v < 600) return;
+    for (int i = 0; i < dm_n; i++) {
+        i32 iy = y + 6 + i * DM_IH;
+        int hot = i == dm_hover;
+        if (hot) fb_fill_round_rect(dm_x + 5, iy, DM_W - 10, DM_IH - 2, 5, theme_accent(), 255);
+        font_draw(dm_x + 16, iy + 4, dm_lbl[i], hot ? RGB(255, 255, 255) : t->text, FONT_REGULAR);
     }
 }
 
@@ -1785,8 +1912,8 @@ static i32 cc_icon_x(void)
 /* ---------- выпадающие меню ---------- */
 
 enum { MENU_LOGO, MENU_APP, MENU_FILE, MENU_EDIT, MENU_VIEW, MENU_WINDOW, MENU_HELP, MENU_COUNT };
-enum { M_NONE, M_ABOUT, M_SETTINGS, M_RESTART, M_SHUTDOWN, M_QUIT, M_HIDE, M_CLOSEWIN,
-       M_NEWFOLDER, M_FULL, M_DARK, M_MIN, M_ZOOM, M_HELP, M_MC, M_OPEN = 100 };
+enum { M_EMPTYTRASH = 200, M_NONE, M_ABOUT, M_SETTINGS, M_RESTART, M_SHUTDOWN, M_QUIT, M_HIDE, M_CLOSEWIN,
+       M_NEWFOLDER, M_FULL, M_DARK, M_MIN, M_ZOOM, M_HELP, M_MC, M_INSTALL, M_OPEN = 100 };
 
 typedef struct { const char *label; int id; int disabled; } mitem_t;
 
@@ -1812,6 +1939,7 @@ static void build_menu(int m)
         mi("About EndixOS PC", M_ABOUT, 0);
         mi(0, 0, 0);
         mi("System Settings...", M_SETTINGS, 0);
+        mi("Install EndixOS...", M_INSTALL, 0);
         mi(0, 0, 0);
         mi("Restart...", M_RESTART, 0);
         mi("Shut Down...", M_SHUTDOWN, 0);
@@ -1830,6 +1958,8 @@ static void build_menu(int m)
         mi("New Folder", M_NEWFOLDER, top != APP_FILES);
         mi(0, 0, 0);
         mi("Close Window", M_CLOSEWIN, top < 0);
+        mi(0, 0, 0);
+        mi("Empty Trash", M_EMPTYTRASH, fs_count(fs_trash()) == 0);
         break;
     case MENU_EDIT:                               /* буфера обмена пока нет */
         mi("Undo", M_NONE, 1);
@@ -1907,8 +2037,8 @@ static void draw_menu_dropdown(int m)
     menu_rect(m, &x, &y, &w, &h);
     for (int k = 0; k < 5; k++)
         fb_fill_round_rect(x - k, y - k + 4, w + 2 * k, h + 2 * k, 9 + k, RGB(0, 0, 0), 10);
-    fb_glass(x, y, w, h, 12, GLASS_ALL, 10, theme_is_dark() ? RGB(44, 44, 50) : RGB(244, 244, 247),
-             theme_is_dark() ? 170 : 172, 30);
+    fb_glass(x, y, w, h, 14, GLASS_ALL, 12, theme_is_dark() ? RGB(44, 44, 50) : RGB(244, 244, 247),
+             theme_is_dark() ? 128 : 124, 36);
     i32 iy = y + 6;
     for (int i = 0; i < mn; i++) {
         if (!mitems[i].label) {
@@ -1947,6 +2077,7 @@ static void menu_exec(int id)
     switch (id) {
     case M_ABOUT:    open_window(APP_ABOUT); break;
     case M_SETTINGS: open_window(APP_SETTINGS); break;
+    case M_INSTALL:  installer_open(); scene_dirty = 1; break;
     case M_RESTART:  sys_reboot(); break;
     case M_SHUTDOWN: shutdown_now(); break;
     case M_QUIT:     if (top >= 0) close_window(top); break;
@@ -1957,6 +2088,7 @@ static void menu_exec(int id)
     case M_ZOOM:
     case M_FULL:     if (top >= 0) toggle_maximize(top); break;
     case M_DARK:     theme_set_dark(!theme_is_dark()); break;
+    case M_EMPTYTRASH: do_empty_trash(); break;
     case M_NEWFOLDER:
         if (top == APP_FILES) files_new_folder();
         break;
@@ -1979,14 +2111,30 @@ static int menu_title_at(i32 px, i32 py)
     return -1;
 }
 
+/* Строка меню как в macOS Tahoe: совсем без фона, текст прямо на обоях. Цвет текста подбирается по яркости обоев под ней. */
+static u32 menubar_ink(void)
+{
+    static int dark_ink = -1;
+    const u32 *p = fb_buffer();
+    i32 W = (i32)fb_width();
+    u32 sum = 0, n = 0;
+    for (i32 y = 2; y < MENUBAR_H - 2; y += 5)
+        for (i32 x = 0; x < W; x += 12) {
+            u32 c = p[(u32)y * (u32)W + (u32)x];
+            sum += ((c >> 16 & 255) * 77 + (c >> 8 & 255) * 150 + (c & 255) * 29) >> 8;
+            n++;
+        }
+    u32 lum = n ? sum / n : 0;
+    if (dark_ink < 0) dark_ink = lum > 130;
+    else if (!dark_ink && lum > 150) dark_ink = 1;                    /* гистерезис: цвет не мигает на границе */
+    else if (dark_ink && lum < 112) dark_ink = 0;
+    return dark_ink ? RGB(18, 18, 22) : RGB(255, 255, 255);
+}
+
 static void draw_menubar(void)
 {
     i32 W = (i32)fb_width();
-    const theme_t *t = theme();
-    const u32 ink = t->mbar_ink;
-
-    fb_glass(0, 0, W, MENUBAR_H, 0, 16, 8, t->mbar_tint, theme_is_dark() ? 120 : 125, 0);
-    fb_blend_rect(0, MENUBAR_H - 1, W, 1, RGB(0, 0, 0), theme_is_dark() ? 90 : 30);
+    const u32 ink = menubar_ink();
 
     logo_draw(11, 4, 16, theme_accent());
 
@@ -2220,7 +2368,7 @@ static int window_at(i32 x, i32 y);
 
 /* Участок фона под стеклом: запоминаем до рисования тела окна и возвращаем перед стеклом. */
 static u32 gl_save_t[FB_MAX_W * TITLE_H], gl_save_s[200 * 800];
-static const i32 app_sidebar[APP_COUNT] = { 150, 0, 170, 0, 0 };
+static const i32 app_sidebar[APP_COUNT] = { 150, 0, 170, 0, 0, 0 };
 
 static void rect_save(u32 *buf, i32 x, i32 y, i32 w, i32 h)
 {
@@ -2359,6 +2507,8 @@ static void sync_sizes(void)
         files_set_size(content_w(APP_FILES), content_h(APP_FILES));
     if (wins[APP_TERMINAL].open)
         term_resize(content_w(APP_TERMINAL), content_h(APP_TERMINAL));
+    if (wins[APP_BROWSER].open)
+        browser_set_size(content_w(APP_BROWSER), content_h(APP_BROWSER));
 }
 
 /* Окно, у которого курсор над группой "светофора" (-1 - нет). */
@@ -2384,7 +2534,9 @@ static void draw_window(int app, int focused)
         rect_save(gl_save_s, w->x, w->y + TITLE_H, sbw, sbh);
 
     /* Тень как в macOS: широкая и мягкая, у неактивного окна слабее. Рамки с k <= 0 лежат под окном. */
-    fb_shadow(w->x, w->y, w->w, w->h, 10, 28, focused ? 96 : 50);
+    {   i32 lf = app == lift_app ? lift_v : 0;          /* окно под рукой: тень шире и темнее */
+        fb_shadow(w->x, w->y, w->w, w->h, 10, 28 + 12 * lf / 1024, (focused ? 96 : 50) + 40 * lf / 1024);
+    }
     fb_fill_round_rect(w->x - 1, w->y - 1, w->w + 2, w->h + 2, WIN_R + 1, RGB(0, 0, 0), focused ? 70 : 45);   /* тонкая обводка */
 
     /* терминал всегда тёмный, остальные окна следуют теме */
@@ -2422,17 +2574,21 @@ static void draw_window(int app, int focused)
                     fb_fill_rect(cx + k, cy - k, 1, 1, tl_ink[b]);
                 } else if (b == 1) {
                     fb_fill_rect(cx + k, cy, 1, 1, tl_ink[b]);
-                } else {
-                    fb_fill_rect(cx + k, cy, 1, 1, tl_ink[b]);
-                    fb_fill_rect(cx, cy + k, 1, 1, tl_ink[b]);
                 }
             }
+            if (b == 2)                                  /* зелёная: две стрелки, как в macOS */
+                for (i32 r = 0; r < 4; r++) {
+                    fb_fill_rect(cx + r, cy - 3 + r, 4 - r, 1, tl_ink[2]);
+                    fb_fill_rect(cx - 3, cy + 3 - r, 4 - r, 1, tl_ink[2]);
+                }
         }
     }
 
-    i32 tw = font_width(app_title[app], FONT_BOLD);
+    const char *ttl = (app == APP_BROWSER && browser_title()[0]) ? browser_title() : app_title[app];
+    i32 tw = font_width(ttl, FONT_BOLD);
+    if (tw > w->w - 190) { tw = w->w - 190; }
     font_draw(w->x + (w->w - tw) / 2, w->y + (TITLE_H - font_height[FONT_BOLD]) / 2,
-              app_title[app], ttext, FONT_BOLD);
+              ttl, ttext, FONT_BOLD);
 
     i32 ox, oy, cw = content_w(app), ch = content_h(app);
     content_origin(app, &ox, &oy);
@@ -2442,6 +2598,7 @@ static void draw_window(int app, int focused)
     case APP_FILES:    files_draw(ox, oy); break;
     case APP_SETTINGS: settings_draw(ox, oy, cw, ch); break;
     case APP_SNAKE:    snake_draw(ox, oy, cw, ch); break;
+    case APP_BROWSER:  browser_draw(ox, oy, focused); break;
     }
 }
 
@@ -2544,6 +2701,7 @@ void wm_init(const sysinfo_t *info)
     cwd = fs_home();
     files_init();
     snake_reset();
+    browser_init();
 
     cur_x = (i32)sys.width / 2;
     cur_y = (i32)sys.height / 2;
@@ -2590,8 +2748,10 @@ static int anim_update(u32 ticks)
     n = anim_approach(mc_v, mc_on ? 1024 : 0, dt);           moving |= n != mc_v || (n != 0 && n != 1024); mc_v = n;
     n = anim_approach(lp_v, lp_open ? 1024 : 0, dt);         moving |= n != lp_v || (n != 0 && n != 1024); lp_v = n;
     moving |= desktop_tick(dt);
+    moving |= cc_tick(dt);
     moving |= widgets_tick(dt);
     moving |= nt_tick(dt);
+    moving |= xf_tick(dt);
     n = anim_approach(sp_v, sp_on ? 1024 : 0, dt);          moving |= n != sp_v || (n != 0 && n != 1024); sp_v = n;
     i32 H = (i32)fb_height();
     {   /* автоскрытие и умное скрытие Dock */
@@ -2611,6 +2771,19 @@ static int anim_update(u32 ticks)
     }
     int inband = dock_magnify && cur_y >= H - DOCK_BAND && !lp_open && dock_hide_v < 300;
     if (inband && dk_mag_v == 0) dk_cx16 = cur_x << 4;                     /* вход в зону: без "разгона" с места */
+    n = anim_approach(dm_v, dm_id >= 0 ? 1024 : 0, dt);
+    if (n != dm_v) moving = 1;
+    dm_v = n;
+    if (drag_app >= 0) lift_app = drag_app;
+    n = anim_approach(lift_v, drag_app >= 0 ? 1024 : 0, dt);
+    if (n != lift_v) moving = 1;
+    lift_v = n;
+    {   int hv = dock_hit(cur_x, cur_y);
+        if (hv >= 0) lbl_id = hv;
+        n = anim_approach(lbl_v, hv >= 0 ? 1024 : 0, dt);
+        if (n != lbl_v) moving = 1;
+        lbl_v = n;
+    }
     n = anim_approach(dk_mag_v, inband ? 1024 : 0, dt);
     if (n != dk_mag_v || (n != 0 && n != 1024)) moving = 1;
     dk_mag_v = n;
@@ -2627,9 +2800,33 @@ static int anim_update(u32 ticks)
     return moving;
 }
 
+void wm_live_hint(void)                                /* запуск с флешки: подсказываем, где установщик */
+{
+    notify("Install EndixOS", "Apple menu > Install EndixOS...");
+}
+
+void wm_set_user(const char *user, const char *host)
+{
+    int dk = fs_resolve(fs_home(), "Desktop");                     /* на установленной системе значок установщика не нужен */
+    int ins = dk >= 0 ? fs_lookup(dk, "Install EndixOS") : -1;
+    if (ins >= 0) fs_remove(ins);
+    int i = 0; while (user[i] && i < 15) { who_user[i] = user[i]; i++; } who_user[i] = 0;
+    if (host && host[0]) { i = 0; while (host[i] && i < 31) { who_host[i] = host[i]; i++; } who_host[i] = 0; }
+}
+
 int wm_tick(u32 ticks)
 {
     now_ticks = ticks;
+    if (login_active()) {
+        int was = login_fading();
+        if (login_tick(ticks)) scene_dirty = 1;
+        if (was) { anim_update(ticks); scene_dirty = 1; }
+        return scene_dirty;
+    }
+    if (installer_active()) {
+        if (installer_tick(ticks)) scene_dirty = 1;
+        return scene_dirty;
+    }
     int gn = anim_update(ticks);
     max_step();
     if (ma_app >= 0) gn = 1;
@@ -2655,6 +2852,7 @@ int wm_tick(u32 ticks)
         cm = 1;
     }
     if (nj_dirty) { nj_dirty = 0; cm = 1; }
+    if (wins[APP_BROWSER].open && browser_tick(ticks) && !wins[APP_BROWSER].minimized) cm = 1;
     return snake_tick(ticks, active) | cm | gn;
 }
 
@@ -2687,6 +2885,19 @@ static void desktop_action(int act)
     case DK_ACT_GLASS:     settings_show_page(2); open_window(APP_SETTINGS); break;
     case DK_ACT_EDITWIDGETS: widgets_edit_start(); break;
     case DK_ACT_REMOVEWIDGET: widgets_remove(desktop_ctx_widget()); break;
+    case DK_ACT_OPENICON: {
+        int n = desktop_ctx_node();
+        if (n >= 0 && fs_valid(n)) {
+            if (desktop_is_installer(n)) { installer_open(); scene_dirty = 1; }
+            else { open_window(APP_FILES); files_goto(n); }
+        }
+        break;
+    }
+    case DK_ACT_DELETEICON: {
+        int n = desktop_ctx_node();
+        if (n >= 0 && fs_valid(n)) { trash_or_remove(n); desktop_deselect(); }
+        break;
+    }
     }
 }
 
@@ -2703,9 +2914,15 @@ static void on_press(void)
         if (cur_y >= MENUBAR_H) widgets_edit_press(cur_x, cur_y);
         return;
     }
-    if (nt_hit(cur_x, cur_y)) { nt_on = 0; return; }
+    if (nt_hit(cur_x, cur_y)) { nt_dismiss_at(cur_x, cur_y); return; }
     if (cur_y < MENUBAR_H && cur_x >= cc_icon_x() - 38 && cur_x < cc_icon_x() - 8) {
         sp_toggle();
+        return;
+    }
+    if (dm_id >= 0) {                                    /* меню значка в Dock: пункт или клик мимо */
+        int it = dm_item_at(cur_x, cur_y), id = dm_id;
+        dm_close();
+        if (it >= 0) dm_run(dm_act[it], id);
         return;
     }
     if (desktop_ctx_is_open()) {                         /* контекстное меню: пункт или клик мимо */
@@ -2738,15 +2955,27 @@ static void on_press(void)
         return;
     }
     if (cc_is_open()) {
-        if (cc_hit(W, cur_x, cur_y))
-            cc_press(W, cur_x, cur_y);
-        else
+        if (cc_hit(W, cur_x, cur_y)) {
+            int a = cc_press(W, cur_x, cur_y);
+            if (a != CCA_NONE) {                         /* быстрая кнопка: закрыть панель и выполнить действие */
+                cc_close();
+                switch (a) {
+                case CCA_SPOTLIGHT: sp_toggle(); break;
+                case CCA_SETTINGS:  open_window(APP_SETTINGS); break;
+                case CCA_TERMINAL:  open_window(APP_TERMINAL); break;
+                case CCA_FILES:     open_window(APP_FILES); break;
+                case CCA_MISSION:   mc_toggle(); break;
+                case CCA_LOCK:      lock_now(); break;
+                }
+            }
+        } else
             cc_close();
         return;
     }
     if (dock_hit(cur_x, cur_y) >= 0) {
         int d = dock_hit(cur_x, cur_y);
         if (d == LP_ID) lp_show();
+        else if (d == TRASH_ID) { open_window(APP_FILES); files_goto(fs_trash()); }
         else open_window(d);
         return;
     }
@@ -2761,8 +2990,8 @@ static void on_press(void)
         if (cur_y >= MENUBAR_H) {
             int n = desktop_press(cur_x, cur_y, now_ticks);
             if (n >= 0) {
-                open_window(APP_FILES);
-                files_goto(n);
+                if (desktop_is_installer(n)) { installer_open(); scene_dirty = 1; }
+                else { open_window(APP_FILES); files_goto(n); }
             }
         }
         return;
@@ -2813,11 +3042,59 @@ static void on_press(void)
         files_click(cx, cy, now_ticks);
     else if (app == APP_SNAKE)
         snake_click();
+    else if (app == APP_BROWSER)
+        browser_click(cx, cy, now_ticks);
+}
+
+static void lock_now(void)
+{
+    if (login_relock()) {
+        menu_close(); cc_close(); desktop_ctx_close();
+        if (mc_on) mc_close_now(-1);
+        if (lp_open) lp_close();
+        if (sp_on) sp_close();
+        scene_dirty = 1;
+    } else notify("Lock Screen", "Install EndixOS to create a user first.");
 }
 
 void wm_handle_event(const event_t *e)
 {
     sync_sizes();
+    if (e->type == EV_KEY && e->a == KEY_LOCK && !login_active() && !installer_active()) {      /* Win+L */
+        lock_now();
+        return;
+    }
+    if (login_active()) {                              /* экран входа забирает весь ввод */
+        if (e->type == EV_MOUSE) {
+            if (cur_x != e->a || cur_y != e->b) cursor_moved = 1;
+            cur_x = e->a; cur_y = e->b;
+            if (login_mouse(e->a, e->b, (int)e->c)) scene_dirty = 1;
+        } else if (e->type == EV_KEY) {
+            if (login_key(e->a)) scene_dirty = 1;
+        }
+        return;
+    }
+    if (installer_active()) {                          /* установщик забирает весь ввод */
+        if (e->type == EV_MOUSE) {
+            if (cur_x != e->a || cur_y != e->b) cursor_moved = 1;
+            cur_x = e->a; cur_y = e->b;
+            if (installer_mouse(e->a, e->b, (int)e->c)) scene_dirty = 1;
+        } else if (e->type == EV_KEY) {
+            if (installer_key(e->a)) scene_dirty = 1;
+        }
+        return;
+    }
+    if (e->type == EV_WHEEL) {
+        int wa = window_at(cur_x, cur_y);
+        if (wa == APP_BROWSER && !wins[wa].minimized && !mc_on && !lp_open) { browser_wheel(e->a); scene_dirty = 1; }
+        else if (wa == APP_FILES && !wins[wa].minimized && !mc_on && !lp_open) { if (files_wheel(e->a)) scene_dirty = 1; }
+        else if (wa == APP_TERMINAL && !wins[wa].minimized && !mc_on && !lp_open && !cm_on) {
+            tview += e->a > 0 ? 3 : -3;
+            tview = tview < 0 ? 0 : tview > ring_n ? ring_n : tview;
+            scene_dirty = 1;
+        }
+        return;
+    }
     if (e->type == EV_MOUSE) {
         int hover_before = dock_hit(cur_x, cur_y), tl_before = tl_hot();
         if (cur_x != e->a || cur_y != e->b)
@@ -2825,6 +3102,11 @@ void wm_handle_event(const event_t *e)
         cur_x = e->a;
         cur_y = e->b;
         u8 btn = (u8)e->c;
+        if (wins[APP_BROWSER].open && !wins[APP_BROWSER].minimized) {
+            i32 bx, by; content_origin(APP_BROWSER, &bx, &by);
+            int over = window_at(cur_x, cur_y) == APP_BROWSER && !mc_on && !lp_open && menu_open < 0;
+            if (browser_mouse(cur_x - bx, cur_y - by, btn & 1, over)) scene_dirty = 1;
+        }
         if (btn || btn_prev || dock_hit(cur_x, cur_y) != hover_before || tl_hot() != tl_before ||
             (cursor_moved && cur_y >= (i32)fb_height() - DOCK_BAND))
             scene_dirty = 1;                /* ещё: волна увеличения Dock */                /* перетаскивание, клик или подсветка в Dock */
@@ -2843,15 +3125,19 @@ void wm_handle_event(const event_t *e)
             int rp = (btn & 2) && !(rprev & 2);
             rprev = btn;
             if (desktop_ctx_is_open()) { desktop_ctx_hover(cur_x, cur_y); scene_dirty = 1; }
+            if (dm_id >= 0) { int hi = dm_item_at(cur_x, cur_y); if (hi != dm_hover) { dm_hover = hi; scene_dirty = 1; } }
             if (sp_on) { int hr = sp_row_at(cur_x, cur_y); if (hr >= 0 && hr != sp_sel && cursor_moved) sp_sel = hr; scene_dirty = 1; }
             if (rp && !mc_on && !lp_open && menu_open < 0 && !cc_is_open()) {
                 if (widgets_edit_active()) {
                     /* в режиме редактирования правая кнопка ничего не открывает */
+                } else if (dock_hit(cur_x, cur_y) >= 0) {
+                    desktop_ctx_close();
+                    dm_open(dock_hit(cur_x, cur_y));
                 } else if (window_at(cur_x, cur_y) < 0 && cur_y >= MENUBAR_H && dock_hit(cur_x, cur_y) < 0) {
-                    int wi = widgets_hit(cur_x, cur_y);
-                    if (wi >= 0) desktop_ctx_open_widget(cur_x, cur_y, wi);
-                    else desktop_ctx_open(cur_x, cur_y);
-                    desktop_deselect();
+                    int wi = widgets_hit(cur_x, cur_y), ic = wi < 0 ? desktop_icon_at(cur_x, cur_y) : -1;
+                    if (wi >= 0) { desktop_ctx_open_widget(cur_x, cur_y, wi); desktop_deselect(); }
+                    else if (ic >= 0) { desktop_select(ic); desktop_ctx_open_icon(cur_x, cur_y, ic); }
+                    else { desktop_ctx_open(cur_x, cur_y); desktop_deselect(); }
                 } else desktop_ctx_close();
                 scene_dirty = 1;
             }
@@ -2860,6 +3146,7 @@ void wm_handle_event(const event_t *e)
         int released = !(btn & 1) && (btn_prev & 1);
         btn_prev = btn;
 
+        if (widgets_dragging() && widgets_edit_drag(cur_x, cur_y, btn & 1)) scene_dirty = 1;      /* тащим виджет */
         if (mc_on || mc_v > 0) {                    /* Mission Control: наведение, выбор окна, клик мимо закрывает */
             int h = mc_on && mc_v >= 900 ? mc_hit(cur_x, cur_y) : -1;
             if (h != mc_hover) mc_hover = h;
@@ -2885,7 +3172,7 @@ void wm_handle_event(const event_t *e)
         } else if ((btn & 1) && rs_app >= 0) {
             resize_move();
         } else if ((btn & 1) && cc_dragging()) {
-            cc_drag((i32)fb_width(), cur_x);
+            cc_drag((i32)fb_width(), cur_x, cur_y);
         } else if ((btn & 1) && settings_dragging()) {
             i32 ox, oy;
             content_origin(APP_SETTINGS, &ox, &oy);
@@ -2932,13 +3219,20 @@ void wm_handle_event(const event_t *e)
             return;
         }
         if (cc_is_open()) {                         /* Esc закрывает панель, остальное ей не нужно */
-            if (e->a == 27) cc_close();
+            if (e->a == 27 && !cc_escape()) cc_close();
+            return;
+        }
+        if (e->a == KEY_DELETE && desktop_selected() >= 0 && fs_valid(desktop_selected())) {   /* Delete: убрать выбранный значок */
+            trash_or_remove(desktop_selected());
+            desktop_deselect();
             return;
         }
         switch (top_app()) {
         case APP_TERMINAL: term_key(e->a, e->b); break;
         case APP_SNAKE:    snake_key(e->a);      break;
+        case APP_BROWSER:  browser_key(e->a, e->b); scene_dirty = 1; break;
         case APP_FILES:    files_key(e->a);      break;
+        case APP_SETTINGS: settings_key(e->a);   break;
         default: break;
         }
     }
@@ -2957,6 +3251,7 @@ static void render_scene(int mode)                  /* 0 окна, 1 Launchpad �
     if (mode == 2) mc_render();
     else genie_render();
     draw_dock();
+    dm_draw();
     desktop_ctx_draw();
     if (cc_brightness() < 100)                      /* яркость: затемнение всего экрана */
         fb_blend_rect(0, 0, (i32)fb_width(), (i32)fb_height(), 0, (u32)(100 - cc_brightness()) * 2);
@@ -2991,9 +3286,69 @@ static void render_scene(int mode)                  /* 0 окна, 1 Launchpad �
     }
 }
 
+/* Плавная смена темы, обоев и акцента: старый кадр растворяется в новом (~0.45 с). */
+#define XF_DUR 45
+static u32 xf_buf[FB_MAX_W * FB_MAX_H];
+static int xf_on, xf_dark = -1, xf_wall = -1, xf_acc = -1;
+static i32 xf_v;
+
+static int xf_tick(u32 dt)
+{
+    if (!xf_on) return 0;
+    xf_v += (i32)dt * 1024 / XF_DUR;
+    if (xf_v >= 1024) { xf_v = 1024; xf_on = 0; }
+    return 1;
+}
+
+static void xf_check(void)                              /* в начале кадра в буфере ещё лежит прошлый кадр */
+{
+    int d = theme_is_dark(), w = settings_wallpaper(), a = theme_accent_index();
+    if (xf_dark >= 0 && !booting && (d != xf_dark || w != xf_wall || a != xf_acc)) {
+        i32 n = (i32)(fb_width() * fb_height());
+        const u32 *src = fb_buffer();
+        for (i32 i = 0; i < n; i++) xf_buf[i] = src[i];
+        xf_on = 1;
+        xf_v = 0;
+    }
+    xf_dark = d; xf_wall = w; xf_acc = a;
+}
+
+static void xf_apply(void)
+{
+    if (!xf_on) return;
+    i32 n = (i32)(fb_width() * fb_height());
+    u32 *dst = fb_buffer();
+    u32 a = (u32)xf_v * 256 / 1024, b = 256 - a;
+    for (i32 i = 0; i < n; i++) {
+        u32 o = xf_buf[i], c = dst[i];
+        u32 rb = (((o & 0xFF00FF) * b + (c & 0xFF00FF) * a) >> 8) & 0xFF00FF;
+        u32 g = (((o & 0x00FF00) * b + (c & 0x00FF00) * a) >> 8) & 0x00FF00;
+        dst[i] = rb | g;
+    }
+}
+
 void wm_render(void)
 {
     sync_sizes();
+    if (login_active()) {
+        if (login_fading()) {                          /* пароль принят: рабочий стол проявляется сквозь экран входа */
+            render_scene(0);
+            anim_screen_save();
+            login_draw(have_time, t_hour, t_min, t_day, t_mon, t_year, clock24);
+            anim_screen_blend(login_alpha());
+        } else {
+            login_draw(have_time, t_hour, t_min, t_day, t_mon, t_year, clock24);
+        }
+        scene_dirty = 0; cursor_moved = 0;
+        return;
+    }
+    if (installer_active()) {
+        installer_draw();
+        scene_dirty = 0;
+        cursor_moved = 0;
+        return;
+    }
+    xf_check();
     if (mc_v > 0) {
         render_scene(2);
     } else if (lp_v > 0 && lp_v < 1024) {                  /* Launchpad плавно проявляется поверх рабочего стола */
@@ -3004,6 +3359,7 @@ void wm_render(void)
     } else {
         render_scene(lp_open ? 1 : 0);
     }
+    xf_apply();
     scene_dirty = 0;
     cursor_moved = 0;
 }

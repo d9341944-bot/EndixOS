@@ -22,43 +22,72 @@ static const u32 wcol[W_N] = { RGB(255, 149, 0), RGB(255, 59, 48), RGB(88, 86, 2
 static const i32 wh[W_N] = { 148, 156, 116, 148 };
 static u8  on[W_N] = { 1, 1, 1, 0 };
 static i32 vv[W_N];                  /* 0..1024: появление и исчезновение */
-static i32 yy[W_N];                  /* текущая позиция по вертикали, 1/16 пикселя */
+static i32 xx[W_N], yy[W_N];         /* где виджет нарисован сейчас, 1/16 пикселя */
+static i32 tx_[W_N], ty_[W_N];       /* куда он должен встать (положение, которое выбрал пользователь) */
+static int drag_i = -1, drag_dx, drag_dy, drag_ox, drag_oy;   /* перетаскивание: виджет, смещение хвата, прежнее место */
+static int pos_dirty;
+static u8  pl[W_N];                   /* виджет уже стоит на своём месте (при раскладке учитываются только такие) */
 static int ed, ed_v;                 /* режим редактирования */
 
 #define TOP_Y 40
+#define EDGE 12
 
-static i32 target_y(int i)           /* куда виджет i встаёт в столбце (только включённые) */
+static i32 bottom_limit(void) { return (i32)fb_height() - 96; }       /* ниже - Dock */
+
+static int overlap(int i, i32 x, i32 y)                               /* пересекается ли i на месте (x, y) с другим включённым виджетом */
 {
-    i32 y = TOP_Y;
-    for (int k = 0; k < W_N; k++) {
-        if (k == i) return y;
-        if (on[k]) y += wh[k] + GAP;
-    }
-    return y;
+    for (int k = 0; k < W_N; k++)
+        if (k != i && pl[k] && x < tx_[k] + WW + 6 && x + WW + 6 > tx_[k] && y < ty_[k] + wh[k] + 6 && y + wh[i] + 6 > ty_[k]) return 1;
+    return 0;
+}
+
+static void place(int i)                                              /* первое свободное место: колонки слева направо, сверху вниз */
+{
+    i32 W = (i32)fb_width(), lim = bottom_limit();
+    for (i32 x = WX; x + WW <= W - EDGE; x += WW + GAP)
+        for (i32 y = TOP_Y; y + wh[i] <= lim; y += 6)
+            if (!overlap(i, x, y)) { tx_[i] = x; ty_[i] = y; pl[i] = 1; return; }
+    tx_[i] = WX; ty_[i] = TOP_Y; pl[i] = 1;
 }
 
 void widgets_init(const sysinfo_t *info)
 {
     si = info;
-    for (int i = 0; i < W_N; i++) { vv[i] = on[i] ? 1024 : 0; yy[i] = target_y(i) << 4; }
+    for (int i = 0; i < W_N; i++) pl[i] = 0;
+    for (int i = 0; i < W_N; i++) { vv[i] = on[i] ? 1024 : 0; if (on[i]) place(i); xx[i] = tx_[i] << 4; yy[i] = ty_[i] << 4; }
 }
 void widgets_set_time(u32 h, u32 m, u32 d, u32 mo, u32 y) { t_h = h; t_m = m; t_d = d; t_mo = mo; t_y = y; }
 void widgets_set_uptime(u32 s) { up_s = s; }
 int  widgets_edit_active(void) { return ed; }
 void widgets_edit_start(void) { ed = 1; }
-void widgets_edit_stop(void) { ed = 0; }
+void widgets_edit_stop(void) { ed = 0; if (drag_i >= 0) widgets_edit_drag(0, 0, 0); }
 int  widgets_get_mask(void) { int m = 0; for (int i = 0; i < W_N; i++) if (on[i]) m |= 1 << i; return m; }
 void widgets_set_mask(int m)
 {
-    for (int i = 0; i < W_N; i++) on[i] = (u8)(m >> i & 1);
-    for (int i = 0; i < W_N; i++) { vv[i] = on[i] ? 1024 : 0; yy[i] = target_y(i) << 4; }
+    for (int i = 0; i < W_N; i++) { on[i] = (u8)(m >> i & 1); pl[i] = 0; }
+    for (int i = 0; i < W_N; i++) { vv[i] = on[i] ? 1024 : 0; if (on[i]) place(i); xx[i] = tx_[i] << 4; yy[i] = ty_[i] << 4; }
 }
-void widgets_remove(int i) { if (i >= 0 && i < W_N) on[i] = 0; }
+void widgets_get_pos(u8 out[8])                   /* x/8 и y/8 каждого виджета (0 - не задано) */
+{
+    for (int i = 0; i < W_N && i < 4; i++) { out[i * 2] = on[i] ? (u8)(tx_[i] / 8) : 0; out[i * 2 + 1] = on[i] ? (u8)(ty_[i] / 8) : 0; }
+}
+void widgets_set_pos(const u8 in[8])
+{
+    i32 W = (i32)fb_width(), lim = bottom_limit();
+    for (int i = 0; i < W_N && i < 4; i++) {
+        if (!on[i] || !in[i * 2] || !in[i * 2 + 1]) continue;
+        i32 x = in[i * 2] * 8, y = in[i * 2 + 1] * 8;
+        if (x + WW > W - 4 || y < 28 || y + wh[i] > lim || overlap(i, x, y)) continue;      /* сохранено для другого экрана или наложилось */
+        tx_[i] = x; ty_[i] = y; xx[i] = x << 4; yy[i] = y << 4;
+    }
+}
+void widgets_remove(int i) { if (i >= 0 && i < W_N) { on[i] = 0; pl[i] = 0; } }
 void widgets_add(int i)
 {
     if (i < 0 || i >= W_N || on[i]) return;
     on[i] = 1;
-    yy[i] = target_y(i) << 4;
+    place(i);
+    xx[i] = tx_[i] << 4; yy[i] = ty_[i] << 4;
 }
 int  widgets_visible(void)
 {
@@ -77,14 +106,17 @@ int widgets_tick(u32 dt)
         n = anim_approach(vv[i], on[i] ? 1024 : 0, dt);
         moving |= n != vv[i] || (n != 0 && n != 1024);
         vv[i] = n;
-        if (!on[i]) continue;
-        i32 want = target_y(i) << 4;
-        for (u32 k = 0; k < (dt > 12 ? 12 : dt) && yy[i] != want; k++) {      /* плавный сдвиг при удалении соседей */
-            i32 d = want - yy[i], st = d * 3 / 10;
-            if (st == 0) st = d > 0 ? 1 : -1;
+        if (!on[i] || i == drag_i) continue;
+        i32 wx = tx_[i] << 4, wy_ = ty_[i] << 4;
+        for (u32 k = 0; k < (dt > 12 ? 12 : dt) && (yy[i] != wy_ || xx[i] != wx); k++) {      /* плавная посадка на место */
+            i32 d = wy_ - yy[i], st = d * 3 / 10;
+            if (st == 0 && d) st = d > 0 ? 1 : -1;
             yy[i] += st;
+            d = wx - xx[i]; st = d * 3 / 10;
+            if (st == 0 && d) st = d > 0 ? 1 : -1;
+            xx[i] += st;
         }
-        if (yy[i] != want) moving = 1;
+        if (yy[i] != wy_ || xx[i] != wx) moving = 1;
     }
     return moving;
 }
@@ -136,13 +168,15 @@ static void aa_line(i32 x0, i32 y0, i32 x1, i32 y1, i32 hw, u32 col)
         }
 }
 
+static int lift;                     /* виджет поднят пальцем: тень глубже */
+
 static void card(i32 x, i32 y, i32 w, i32 h, u32 *text, u32 *sub)
 {
     int dark = theme_is_dark();
     u32 bg = dark ? RGB(44, 44, 50) : RGB(252, 252, 254);
     *text = dark ? RGB(240, 240, 244) : RGB(28, 28, 32);
     *sub = dark ? RGB(150, 150, 160) : RGB(124, 124, 132);
-    fb_shadow(x, y, w, h, 6, 16, dark ? 70 : 38);
+    if (lift) fb_shadow(x, y, w, h, 16, 30, dark ? 120 : 80); else fb_shadow(x, y, w, h, 6, 16, dark ? 70 : 38);
     fb_fill_round_rect(x, y, w, h, 20, dark ? RGB(86, 86, 94) : RGB(214, 214, 220), 255);
     fb_fill_round_rect(x + 1, y + 1, w - 2, h - 2, 19, bg, 255);
 }
@@ -303,11 +337,12 @@ static void draw_one(int i, i32 x, i32 y)
 }
 
 static i32 wy(int i) { return yy[i] >> 4; }
+static i32 wxp(int i) { return xx[i] >> 4; }
 
 int widgets_hit(i32 px, i32 py)
 {
     for (int i = 0; i < W_N; i++)
-        if (on[i] && px >= WX && px < WX + WW && py >= wy(i) && py < wy(i) + wh[i]) return i;
+        if (on[i] && px >= wxp(i) && px < wxp(i) + WW && py >= wy(i) && py < wy(i) + wh[i]) return i;
     return -1;
 }
 
@@ -326,15 +361,19 @@ void widgets_draw(int late)
     i32 H = (i32)fb_height(), W = (i32)fb_width();
     if (editing)
         fb_blend_rect(0, 24, W, H - 24, 0, (u32)(110 * ed_v / 1024));
+    for (int pass = 0; pass < 2; pass++)                       /* вторым проходом - поднятый виджет, поверх остальных */
     for (int i = 0; i < W_N; i++) {
         if (!on[i] && vv[i] <= 0) continue;
-        i32 y = wy(i);
-        if (y + wh[i] >= H - 90) continue;
+        if ((i == drag_i) != pass) continue;
+        i32 x = wxp(i), y = wy(i);
+        if (y + wh[i] >= H - 90 && i != drag_i) continue;
         int anim = vv[i] < 1024;
-        if (anim) anim_region_begin(WX - 24, y - 24, WW + 48, wh[i] + 48);
-        draw_one(i, WX, y);
+        lift = i == drag_i;
+        if (anim) anim_region_begin(x - 24, y - 24, WW + 48, wh[i] + 48);
+        draw_one(i, x, y);
         if (anim) anim_region_end(-(1024 - vv[i]) * 14 / 1024, vv[i], 0);
-        if (ed && on[i]) minus_button(WX, y);
+        lift = 0;
+        if (ed && on[i] && !lift && i != drag_i) minus_button(x, y);
     }
     if (!editing) return;
 
@@ -372,7 +411,7 @@ int widgets_edit_press(i32 px, i32 py)
     if (!ed) return 0;
     for (int i = 0; i < W_N; i++)
         if (on[i]) {
-            i32 cx = WX, cy = wy(i);
+            i32 cx = wxp(i), cy = wy(i);
             if ((px - cx) * (px - cx) + (py - cy) * (py - cy) <= 14 * 14) { widgets_remove(i); return 1; }
         }
     int off[W_N], n = 0;
@@ -386,7 +425,46 @@ int widgets_edit_press(i32 px, i32 py)
     i32 by = gy + gh - 44;
     if (px >= gx + gw - 104 && px < gx + gw - 20 && py >= by && py < by + 30) { ed = 0; return 1; }
     if (px >= gx && px < gx + gw && py >= gy && py < gy + gh) return 1;       /* внутри галереи, мимо кнопок */
-    if (widgets_hit(px, py) >= 0) return 1;
+    int h = widgets_hit(px, py);
+    if (h >= 0) {                                                              /* взяли виджет: тащим */
+        drag_i = h; drag_dx = px - wxp(h); drag_dy = py - wy(h); drag_ox = tx_[h]; drag_oy = ty_[h];
+        return 1;
+    }
     ed = 0;                                                                    /* клик по пустому месту: готово */
     return 1;
 }
+
+/* Движение мыши в режиме редактирования: тащим виджет, на отпускании кладём на место.
+ * Возвращает 1, если картинку нужно обновить. */
+int widgets_edit_drag(i32 px, i32 py, int down)
+{
+    if (drag_i < 0) return 0;
+    int i = drag_i;
+    if (down) {
+        i32 W = (i32)fb_width(), H = (i32)fb_height();
+        i32 x = px - drag_dx, y = py - drag_dy;
+        if (x < 4) x = 4;
+        if (x > W - WW - 4) x = W - WW - 4;
+        if (y < 28) y = 28;
+        if (y > H - wh[i] - 8) y = H - wh[i] - 8;
+        xx[i] = x << 4; yy[i] = y << 4;
+        return 1;
+    }
+    /* отпустили: притягиваем к сетке и к левому краю, при наложении или заходе под Dock - назад */
+    i32 x = wxp(i), y = wy(i), g = 6;
+    x = (x + g / 2) / g * g; y = (y + g / 2) / g * g;
+    if (x > WX - 14 && x < WX + 14) x = WX;                                     /* магнит к привычной колонке */
+    i32 W = (i32)fb_width();
+    if (x + WW > W - 4) x = W - WW - 4;
+    if (y < 32) y = 32;
+    int offn = 0; for (int k = 0; k < W_N; k++) if (!on[k]) offn++;
+    i32 gw = 312, gh = 52 + (offn ? offn : 1) * 62 + 56, gx = W - gw - 18, gy = 48;      /* галерея справа: под неё не кладём */
+    int under_gallery = x + WW > gx && x < gx + gw && y + wh[i] > gy && y < gy + gh;
+    if (y + wh[i] > bottom_limit() || overlap(i, x, y) || under_gallery) { x = drag_ox; y = drag_oy; }
+    else if (x != drag_ox || y != drag_oy) pos_dirty = 1;
+    tx_[i] = x; ty_[i] = y;
+    drag_i = -1;
+    return 1;
+}
+int widgets_dragging(void) { return drag_i >= 0; }
+int widgets_pos_dirty(void) { int d = pos_dirty; pos_dirty = 0; return d; }

@@ -35,7 +35,7 @@ static rxd_t rxd[NRX] __attribute__((aligned(16)));
 static txd_t txd[NTX] __attribute__((aligned(16)));
 static u8 rxbuf[NRX][BUFSZ] __attribute__((aligned(16)));
 static u8 txbuf[NTX][BUFSZ] __attribute__((aligned(16)));
-static u32 rx_cur, tx_cur;
+static u32 rx_cur, tx_cur, n_rx, n_tx, n_txfail;
 
 static u32 rd(u32 r) { return *(volatile u32 *)(mmio + r); }
 static void wr(u32 r, u32 v) { *(volatile u32 *)(mmio + r) = v; }
@@ -95,7 +95,7 @@ int e1000_send(const void *frame, u32 len)
     if (!ok || len > 1514) return -1;
     __asm__ volatile("" ::: "memory");
     txd_t *t = &txd[tx_cur];
-    if (!(t->status & 1)) return -1;                   /* кольцо занято */
+    if (!(t->status & 1)) { n_txfail++; return -1; }   /* кольцо занято */
     const u8 *s = frame;
     for (u32 i = 0; i < len; i++) txbuf[tx_cur][i] = s[i];
     t->len = (u16)len;
@@ -103,6 +103,7 @@ int e1000_send(const void *frame, u32 len)
     t->cmd = 1 | 2 | 8;                                /* EOP, IFCS, RS */
     tx_cur = (tx_cur + 1) % NTX;
     wr(R_TDT, tx_cur);
+    n_tx++;
     return 0;
 }
 
@@ -113,9 +114,11 @@ void e1000_poll(void (*rx)(const u8 *, u32))
         __asm__ volatile("" ::: "memory");
         rxd_t *r = &rxd[rx_cur];
         if (!(r->status & 1)) break;                   /* DD */
-        if ((r->status & 2) && !r->errors && r->len >= 14) rx(rxbuf[rx_cur], r->len);
+        if ((r->status & 2) && !r->errors && r->len >= 14) { n_rx++; rx(rxbuf[rx_cur], r->len); }
         r->status = 0;
         wr(R_RDT, rx_cur);
         rx_cur = (rx_cur + 1) % NRX;
     }
 }
+
+void e1000_stats(u32 *rx, u32 *tx, u32 *txfail, int *present) { *rx = n_rx; *tx = n_tx; *txfail = n_txfail; *present = ok; }

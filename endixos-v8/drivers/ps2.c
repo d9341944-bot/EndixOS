@@ -67,8 +67,8 @@ static int mouse_cmd(u8 c)
 /* ---------- мышь ---------- */
 
 static i32 mx, my, bound_w = 1024, bound_h = 768;
-static u8  pkt[3];
-static int pkt_len;
+static u8  pkt[4];
+static int pkt_len, pkt_size = 3;     /* 4 байта, если мышь с колесом (IntelliMouse) */
 
 void ps2_set_bounds(u32 width, u32 height)
 {
@@ -83,7 +83,7 @@ static void mouse_byte(u8 b)
     if (pkt_len == 0 && !(b & 0x08))
         return;                           /* потеряна синхронизация: первый байт всегда с битом 3 */
     pkt[pkt_len++] = b;
-    if (pkt_len < 3)
+    if (pkt_len < pkt_size)
         return;
     pkt_len = 0;
 
@@ -102,6 +102,11 @@ static void mouse_byte(u8 b)
     if (my > bound_h - 1) my = bound_h - 1;
 
     event_push(EV_MOUSE, mx, my, f & 7);
+    if (pkt_size == 4) {
+        i32 z = (i32)(pkt[3] & 0x0F);
+        if (z & 8) z -= 16;                   /* знаковое 4-битное колесо */
+        if (z) event_push(EV_WHEEL, z, 0, 0);
+    }
 }
 
 /* ---------- клавиатура ---------- */
@@ -114,7 +119,7 @@ static const char map_shift[58] =
     "\0\033" "!@#$%^&*()_+" "\b\t" "QWERTYUIOP{}" "\n" "\0" "ASDFGHJKL:\"~" "\0"
     "|" "ZXCVBNM<>?" "\0" "*" "\0" " ";
 
-static int k_shift, k_ctrl, k_caps, k_ext;
+static int k_shift, k_ctrl, k_caps, k_ext, k_win;
 
 static void kbd_byte(u8 b)
 {
@@ -127,6 +132,10 @@ static void kbd_byte(u8 b)
 
     if (k_ext) {
         k_ext = 0;
+        if (sc == 0x5B || sc == 0x5C) {   /* клавиша Win (Super) */
+            k_win = !release;
+            return;
+        }
         if (sc == 0x1D) {                 /* правый Ctrl */
             k_ctrl = !release;
             return;
@@ -153,6 +162,10 @@ static void kbd_byte(u8 b)
     if (release)
         return;
     if (sc == 0x3A) { k_caps = !k_caps; return; }
+    if (k_win && sc == 0x26) {            /* Win+L: экран блокировки */
+        event_push(EV_KEY, KEY_LOCK, 0, 0);
+        return;
+    }
     if (sc == 0x3C) {                     /* F2 */
         event_push(EV_KEY, KEY_F2, k_ctrl, 0);
         return;
@@ -220,6 +233,11 @@ void ps2_init(void)
     int ack_kbd = dev_read();
 
     int ack_def   = mouse_cmd(0xF6);      /* мышь: настройки по умолчанию */
+    /* колесо: магическая последовательность частот 200,100,80, затем запрос ID (3 - есть колесо) */
+    mouse_cmd(0xF3); mouse_cmd(200);
+    mouse_cmd(0xF3); mouse_cmd(100);
+    mouse_cmd(0xF3); mouse_cmd(80);
+    if (mouse_cmd(0xF2) == 0xFA && dev_read() == 3) pkt_size = 4;
     int ack_start = mouse_cmd(0xF4);      /* мышь: начать передачу данных */
     serial_puts("PS/2: ack kbd=");
     serial_put_hex((u32)ack_kbd);
