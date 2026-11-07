@@ -1,0 +1,35 @@
+#ifndef ENDIX_EVENT_H
+#define ENDIX_EVENT_H
+
+#include "types.h"
+
+#define EV_MOUSE 1   /* a = x, b = y, c = кнопки (бит0 левая, бит1 правая, бит2 средняя) */
+#define EV_KEY   2   /* a = символ (ASCII, '\b', '\n', '\t', 27) или KEY_*, b = 1 если нажат Ctrl */
+
+#define EV_WHEEL 3   /* a = прокрутка колеса: >0 вверх (от пользователя), <0 вниз */
+
+/* Коды клавиш без символа (значения выше ASCII). */
+#define KEY_UP     0x101
+#define KEY_DOWN   0x102
+#define KEY_LEFT   0x103
+#define KEY_RIGHT  0x104
+#define KEY_DELETE 0x105
+#define KEY_F2     0x106
+#define KEY_F3     0x107
+#define KEY_PGUP   0x108
+#define KEY_PGDN   0x109
+#define KEY_HOME   0x10A
+#define KEY_END    0x10B
+#define KEY_LOCK   0x10C   /* Win+L */
+
+typedef struct {
+    int type;
+    i32 a, b, c;
+} event_t;
+
+/* push вызывается из обработчиков IRQ, pop - из главного цикла. */
+void event_push(int type, i32 a, i32 b, i32 c);
+int  event_pop(event_t *out);
+int  event_pending(void);      /* 1, если очередь не пуста */
+
+#endif
