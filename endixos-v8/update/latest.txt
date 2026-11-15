@@ -1,5 +1,5 @@
-build=2
-version=8.1
-size=1967028
-notes=First update
-sha256=3bd1f868f97268f73d8337b1105f32c685e82c8ef87dbc3bace1e0d81bbda7d0
+build=8
+version=8.7
+size=1828584
+notes=Wi-Fi: network list, password entry, WPA2 connection (untested on hardware)
+sha256=a87b325b421cf158e26bb17e36599e93c478afc5ebe3de6e713674eee55a5366
