@@ -1,5 +1,5 @@
-build=8
-version=8.7
-size=1828584
-notes=Wi-Fi: network list, password entry, WPA2 connection (untested on hardware)
-sha256=a87b325b421cf158e26bb17e36599e93c478afc5ebe3de6e713674eee55a5366
+build=35
+version=8.2
+size=3302588
+notes=Browix: новый значок, значки
+sha256=82e38bd9412f68ae0db1cde79705051c11c64b0c18411681fbc837d2b2142aad
