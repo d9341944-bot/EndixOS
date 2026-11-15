@@ -5,7 +5,9 @@
 static u8  *screen;                                /* видеопамять */
 static u32  s_pitch, s_width, s_height;
 static u32  s_phys_w;                              /* физическая ширина; s_width - логическая (шире, если экран растягивает 4:3 на широкую матрицу) */
-static u16  wx_lo[FB_MAX_W], wx_hi[FB_MAX_W], wx_wl[FB_MAX_W], wx_wh[FB_MAX_W]; static u32 wx_inv[FB_MAX_W];
+/* сжатие строки: до 4 соседних пикселей с весами (сумма 256), считаются сразу по парам каналов */
+static u16  wx_i[FB_MAX_W]; static u16 wx_w[FB_MAX_W][4];
+static int  perf_lv;                               /* 0 полное качество, 1 без теней и с лёгким размытием, 2 без размытия */
 static u32  backbuf[FB_MAX_W * FB_MAX_H];          /* теневой буфер (bss) */
 static u32  flipped_bytes;                         /* счётчик записей в видеопамять (для замеров) */
 static u32  bgbuf[FB_MAX_W * FB_MAX_H];            /* кэш обоев */
@@ -29,11 +31,15 @@ int fb_set_logical_width(u32 lw)
     if (lw <= s_phys_w || lw > FB_MAX_W || s_phys_w == 0) return -1;
     for (u32 dx = 0; dx < s_phys_w; dx++) {
         u32 a = dx * lw * 256 / s_phys_w, b = (dx + 1) * lw * 256 / s_phys_w;     /* границы в 1/256 пикселя */
-        u32 lo = a >> 8, hi = (b - 1) >> 8;
-        wx_lo[dx] = (u16)lo; wx_hi[dx] = (u16)hi;
-        if (lo == hi) { wx_wl[dx] = (u16)(b - a); wx_wh[dx] = 0; }
-        else { wx_wl[dx] = (u16)(256 - (a & 255)); wx_wh[dx] = (u16)(((b - 1) & 255) + 1); }
-        wx_inv[dx] = (1u << 22) / (b - a);
+        u32 lo = a >> 8, hi = (b - 1) >> 8, tot = b - a, acc = 0;
+        wx_i[dx] = (u16)lo;
+        for (u32 k = 0; k < 4; k++) {
+            u32 px = lo + k, ps = px << 8, pe = ps + 256;                   /* пиксель [ps, pe) в 1/256 */
+            u32 c = px > hi ? 0 : (pe < b ? pe : b) - (ps > a ? ps : a);
+            u32 w = c * 256 / tot;
+            wx_w[dx][k] = (u16)w; acc += w;
+        }
+        wx_w[dx][0] = (u16)(wx_w[dx][0] + (256 - acc));                     /* ровно 256: без потери яркости */
     }
     s_width = lw;
     return 0;
@@ -48,17 +54,19 @@ static void scale_out(u32 y0, u32 y1, u32 px0, u32 px1)
         const u32 *src = &backbuf[y * s_width];
         u32 *dst = (u32 *)(screen + y * s_pitch);
         for (u32 dx = px0; dx < px1; dx++) {
-            u32 lo = wx_lo[dx], hi = wx_hi[dx], wl = wx_wl[dx];
-            u32 p = src[lo], r = ((p >> 16) & 255) * wl, g = ((p >> 8) & 255) * wl, b = (p & 255) * wl;
-            for (u32 k = lo + 1; k < hi; k++) { p = src[k]; r += ((p >> 16) & 255) << 8; g += ((p >> 8) & 255) << 8; b += (p & 255) << 8; }
-            if (hi > lo) { u32 wh = wx_wh[dx]; p = src[hi]; r += ((p >> 16) & 255) * wh; g += ((p >> 8) & 255) * wh; b += (p & 255) * wh; }
-            u32 inv = wx_inv[dx];
-            r = (r * inv) >> 22; g = (g * inv) >> 22; b = (b * inv) >> 22;
-            dst[dx] = (r > 255 ? 255 : r) << 16 | (g > 255 ? 255 : g) << 8 | (b > 255 ? 255 : b);
+            const u32 *s = src + wx_i[dx];
+            const u16 *w = wx_w[dx];
+            u32 p0 = s[0], p1 = s[1], p2 = s[2], p3 = s[3];
+            u32 rb = ((p0 & 0xFF00FF) * w[0] + (p1 & 0xFF00FF) * w[1] + (p2 & 0xFF00FF) * w[2] + (p3 & 0xFF00FF) * w[3]) >> 8;
+            u32 g  = ((p0 & 0x00FF00) * w[0] + (p1 & 0x00FF00) * w[1] + (p2 & 0x00FF00) * w[2] + (p3 & 0x00FF00) * w[3]) >> 8;
+            dst[dx] = (rb & 0xFF00FF) | (g & 0x00FF00);
         }
         flipped_bytes += (px1 - px0) * 4;
     }
 }
+
+void fb_perf_set(int level) { perf_lv = level < 0 ? 0 : level > 2 ? 2 : level; }
+int  fb_perf_get(void) { return perf_lv; }
 
 u32 fb_width(void)  { return s_width; }
 u32 fb_height(void) { return s_height; }
@@ -283,16 +291,17 @@ void fb_glass_set_reduced(int on) { glass_reduced = on; }
 
 void fb_glass(i32 x, i32 y, i32 w, i32 h, i32 r, u32 corners, i32 br, u32 tint, u32 ta, u32 sheen)
 {
-    if (glass_reduced) {                 /* "Reduce transparency": без размытия, плотнее тон */
+    if (glass_reduced || perf_lv >= 2) { /* "Reduce transparency" или авто-режим скорости: без размытия, плотнее тон */
         br = 0;
         ta = ta + 70 > 255 ? 255 : ta + 70;
     }
     if (w <= 0 || h <= 0)
         return;
-    int lq = (corners & 15) == 15 && h >= 20 && w >= 40 && br > 0 && !glass_reduced;   /* парящая панель: "жидкое стекло" */
+    int lq = (corners & 15) == 15 && h >= 20 && w >= 40 && br > 0 && !glass_reduced && perf_lv < 2;   /* парящая панель: "жидкое стекло" */
     if (lq) {
         br = br * gp[GLASS_BLUR] / 50;
         if (br > 20) br = 20;
+        if (perf_lv >= 1 && br > 5) br = 5;                 /* окно размытия 8 пикселей вместо 16-32 */
         ta = ta * (u32)gp[GLASS_FROST] / 50;
         if (ta > 255) ta = 255;
     }
@@ -307,7 +316,7 @@ void fb_glass(i32 x, i32 y, i32 w, i32 h, i32 r, u32 corners, i32 br, u32 tint, 
     i32 x0 = x < 0 ? 0 : x, x1 = x + w > W ? W : x + w;
     if (x0 >= x1 || y0 >= y1)
         return;
-    if (lq)                                              /* мягкая тень снизу */
+    if (lq && perf_lv < 1)                               /* мягкая тень снизу */
         fb_shadow(x, y, w, h, h / 12 + 2, h / 4 < 14 ? h / 4 + 3 : 18, 34);
 
     /* вставки левого и правого краёв для строки j панели */
@@ -472,6 +481,7 @@ void fb_glass(i32 x, i32 y, i32 w, i32 h, i32 r, u32 corners, i32 br, u32 tint, 
  * Область - прямоугольник (x,y,w,h), сдвинутый вниз на dy; spread - на сколько пикселей тень выходит за него. */
 void fb_shadow(i32 x, i32 y, i32 w, i32 h, i32 dy, i32 spread, u32 amax)
 {
+    if (perf_lv >= 1) return;                      /* тени - самая дорогая мелочь, на медленном экране отключаются */
     i32 W = (i32)s_width, H = (i32)s_height;
     i32 sy = y + dy, in = 7;
     u32 al[64];                                    /* alpha для расстояния k = -in .. spread */

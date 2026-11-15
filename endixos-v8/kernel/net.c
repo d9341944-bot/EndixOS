@@ -469,6 +469,8 @@ static char http_path[256], http_hostname[64], http_loc[96];
 static int http_tls;                                   /* 1 - https: поверх TCP идёт TLS */
 static u8 tls_out[1300]; static u32 tls_out_n;
 static int http_in_hdr, http_status, http_show_hdr;
+static char http_date[40];                          /* заголовок Date последнего ответа (для установки времени) */
+const char *net_fetch_date(void) { return http_date; }
 static u32 http_body, http_port;
 static char http_line[110]; static u32 http_ll;
 static u32 http_tail;                                 /* последние 4 байта заголовка */
@@ -566,6 +568,10 @@ static void http_hdr_line(void)
         while (l[i] >= '0' && l[i] <= '9') http_status = http_status * 10 + (l[i++] - '0');
         if (!http_status) http_status = 1;
         if (!http_show_hdr) say(l);
+    } else if ((l[0] | 32) == 'd' && (l[1] | 32) == 'a' && (l[2] | 32) == 't' && (l[3] | 32) == 'e' && l[4] == ':') {
+        const char *v = l + 5; while (*v == ' ') v++;
+        u32 i = 0; while (v[i] && i < sizeof(http_date) - 1) { http_date[i] = v[i]; i++; }
+        http_date[i] = 0;
     } else if ((l[0] | 32) == 'l' && (l[1] | 32) == 'o' && (l[2] | 32) == 'c' && (l[3] | 32) == 'a' && l[8] == ':') {
         const char *v = l + 9; while (*v == ' ') v++;
         u32 i = 0; while (v[i] && i < sizeof(http_loc) - 1) { http_loc[i] = v[i]; i++; }
@@ -657,7 +663,7 @@ static void http_request(void)
 {
     u8 b[400]; char *p = (char *)b;
     p = put_s(p, "GET "); p = put_s(p, http_path); p = put_s(p, " HTTP/1.0\r\nHost: "); p = put_s(p, http_hostname);
-    p = put_s(p, "\r\nUser-Agent: EndixOS/8.0\r\nAccept: text/html,text/plain,*/*\r\nAccept-Encoding: identity\r\nAccept-Language: en,ru\r\nConnection: close\r\n\r\n");
+    p = put_s(p, "\r\nUser-Agent: EndixOS/8.2\r\nAccept: text/html,text/plain,*/*\r\nAccept-Encoding: identity\r\nAccept-Language: en,ru\r\nConnection: close\r\n\r\n");
     if (http_tls) { tls_write(b, (u32)((u8 *)p - b)); tls_flush(); return; }
     tcp_send_data(0x18, b, (u32)((u8 *)p - b));
 }
@@ -725,7 +731,7 @@ static void http_dns_done(u32 ip, int ok, void *arg)
     tcp.ip = ip; tcp.rport = http_port; tcp.lport = 40000 + (now & 0x3FF);
     tcp.iss = now * 2654435u + 12345u; tcp.snd_nxt = tcp.iss; tcp.snd_una = tcp.iss;
     tcp.state = T_SYN; tcp.rcv_nxt = 0;
-    http_in_hdr = 1; http_status = 0; http_body = 0; http_tail = 0; http_ll = 0; http_loc[0] = 0;
+    http_in_hdr = 1; http_status = 0; http_body = 0; http_tail = 0; http_ll = 0; http_loc[0] = 0; http_date[0] = 0;
     http_chunked = 0; ck_st = 0; ck_left = 0; fx_ctype = 0;
     tcp_send_data(0x02, 0, 0);
 }

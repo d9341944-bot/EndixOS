@@ -1,4 +1,5 @@
 #include "login.h"
+#include "avatar.h"
 #include "fb.h"
 #include "font.h"
 #include "theme.h"
@@ -109,20 +110,6 @@ static void big_text(i32 x, i32 y, const char *s, i32 sc, u32 color, u32 alpha)
     }
 }
 
-static int isq(int v) { int r = 0; while ((r + 1) * (r + 1) <= v) r++; return r; }
-static void avatar(i32 cx, i32 cy, i32 r)
-{
-    fb_fill_circle(cx, cy, r, RGB(142, 142, 150));
-    fb_fill_circle(cx, cy - r / 5, r * 3 / 10, RGB(236, 236, 240));
-    i32 bcy = cy + r * 9 / 10, rx = r * 7 / 10, ry = r * 6 / 10;
-    for (i32 y = cy + r / 8; y < cy + r; y++) {
-        i32 dy = y - cy, ha = isq(r * r - dy * dy), db = y - bcy, hb = 0;
-        if (db > -ry && db < ry) hb = rx * isq(ry * ry - db * db) / ry;
-        i32 hw = ha < hb ? ha : hb;
-        if (hw > 0) fb_fill_rect(cx - hw, y, 2 * hw, 1, RGB(236, 236, 240));
-    }
-}
-
 static const i8 SN[20] = { 0, 3, 5, 7, 9, 9, 9, 7, 5, 3, 0, -3, -5, -7, -9, -9, -9, -7, -5, -3 };
 static int in_gap(int k, int gc, int hw) { int d = (k - gc + 20) % 20; return d <= hw || d >= 20 - hw; }
 static void ring_glyph(i32 cx, i32 cy, int gc, int power)
@@ -182,7 +169,7 @@ void login_draw(int have_time, u32 hour, u32 min, u32 day, u32 month, u32 year, 
     }
     /* пользователь */
     i32 acy = H * 56 / 100, so = shake_off();
-    avatar(cx, acy, 44);
+    avatar_draw(cx, acy, 44);
     font_draw(cx - font_width(c_full, FONT_BOLD) / 2, acy + 56, c_full, white, FONT_BOLD);
     i32 fw = 224, fh = 34, fx = cx - fw / 2 + so, fy = acy + 90;
     fb_fill_round_rect(fx, fy, fw, fh, fh / 2, white, 70);

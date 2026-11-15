@@ -1,7 +1,10 @@
 /* Приложение Settings: боковое меню, страницы Wallpapers / Themes / About. */
 #include "settings.h"
+#include "../drivers/ps2.h"
 #include "wm.h"
 #include "icons.h"
+#include "avatar.h"
+#include "login.h"
 #include "fb.h"
 #include "font.h"
 #include "theme.h"
@@ -10,25 +13,29 @@
 #include "wallpaper.h"
 #include "photos.h"
 #include "scenery.h"
+#include "timeset.h"
 #include "resolution.h"
 #include "update.h"
+#include "wifi.h"
+#include "perf.h"
 #include "control.h"
 #include "../kernel/event.h"
 
 #define SIDEBAR_W 170
-#define SIDE_ITEMS_Y 100
+#define SIDE_ITEMS_Y 94
+#define SIDE_PITCH 30
 #define WIN_RADIUS 14
 #define THUMB_W 100
 #define THUMB_H 62
 #define CARD_W 150
 #define CARD_H 100
 
-enum { PAGE_WALL, PAGE_PHOTOS, PAGE_THEMES, PAGE_GLASS, PAGE_DISPLAY, PAGE_SOUND, PAGE_UPDATE, PAGE_ABOUT, PAGE_COUNT };
+enum { PAGE_WALL, PAGE_PHOTOS, PAGE_THEMES, PAGE_GLASS, PAGE_ICONS, PAGE_DISPLAY, PAGE_SOUND, PAGE_TRACKPAD, PAGE_WIFI, PAGE_DATETIME, PAGE_UPDATE, PAGE_ACCOUNT, PAGE_ABOUT, PAGE_COUNT };
 
-static const char *const page_name[PAGE_COUNT] = { "Wallpaper", "Photos", "Appearance", "Liquid Glass", "Displays", "Sound", "Software Update", "About" };
+static const char *const page_name[PAGE_COUNT] = { "Wallpaper", "Photos", "Appearance", "Liquid Glass", "Icons", "Displays", "Sound", "Trackpad", "Wi-Fi", "Date & Time", "Software Update", "Account", "About" };
 static const char *const page_keys[PAGE_COUNT] = {
     "wallpaper background picture desktop", "photos pictures jpeg png own images wallpaper", "appearance dark light accent color dock clock 24 hour transparency magnification",
-    "liquid glass blur refraction frost", "displays brightness screen display", "sound volume audio", "software update upgrade version check install restart download", "about system info version memory" };
+    "liquid glass blur refraction frost", "icons style glass mono tinted color one color app icons", "displays brightness screen display", "sound volume audio", "trackpad touchpad mouse tap click scroll cursor speed natural pointer", "wifi wi-fi wireless network internet connection router", "date time clock calendar time zone timezone hour minute year month day sync automatic ntp internet", "software update upgrade version check install restart download", "account user avatar picture emoji photo lock screen login", "about system info version memory" };
 
 /* поле Search в боковой панели */
 static char sq[24]; static int sqn, sq_focus;
@@ -55,7 +62,7 @@ static const sysinfo_t *si;
 static int page = PAGE_WALL;
 static int wall;
 static u32 thumbs[WALL_RENDERED][THUMB_W * THUMB_H];
-static u8  thumb_ok[WALL_RENDERED];
+static u8  thumb_ok[WALL_RENDERED], thumb_ph[WALL_RENDERED];
 static u32 pthumbs[PHOTO_MAX][THUMB_W * THUMB_H];
 static u8  pthumb_ok[PHOTO_MAX];            /* 0 - не пробовали, 1 - готова, 2 - не читается */
 
@@ -146,26 +153,56 @@ static void about_row(i32 x, i32 y, const char *label, const char *value)
     font_draw(x + 100, y, value, t->text, FONT_REGULAR);
 }
 
+static void about_laptop(i32 cx, i32 ly)                /* ноутбук EndixOS PC */
+{
+    i32 lx = cx - 64;
+    fb_fill_round_rect(lx, ly, 128, 84, 7, RGB(28, 28, 32), 255);
+    for (i32 j = 0; j < 76; j++) {
+        u32 r = (u32)(58 + j * 40 / 76), g = (u32)(134 + j * 44 / 76), b = (u32)(214 + j * 26 / 76);
+        fb_fill_rect(lx + 5, ly + 4 + j, 118, 1, RGB(r, g, b));
+    }
+    logo_draw(cx - 22, ly + 16, 44, RGB(255, 255, 255));
+    fb_fill_round_rect(cx - 15, ly, 30, 6, 3, RGB(28, 28, 32), 255);
+    fb_fill_round_rect(cx - 82, ly + 84, 164, 7, 3, RGB(206, 207, 212), 255);
+    fb_fill_round_rect(cx - 22, ly + 84, 44, 3, 1, RGB(160, 161, 168), 255);
+}
+
+#define AB_G_Y 206
+#define AB_ROW 34
+#define AB_ROWS 5
+#define AB_UPD_Y (AB_G_Y + AB_ROWS * AB_ROW + 16)
+#define AB_UPD_W 170
+
+static void ab_cent(i32 cx, i32 y, const char *s, u32 c, int font) { font_draw(cx - font_width(s, font) / 2, y, s, c, font); }
+
 void about_draw(i32 x, i32 y)
 {
     const theme_t *t = theme();
     char buf[96];
+    i32 gx = x + 24, cx = gx + GRP_W / 2;
 
-    logo_draw(x + 28, y + 30, 72, theme_accent());
+    about_laptop(cx, y + 26);
+    ab_cent(cx, y + 128, "EndixOS PC", t->text, FONT_TITLE);
+    char *p = put_str(buf, "Version " ENDIX_VERSION "  (build ");
+    p = put_u32(p, ENDIX_BUILD);
+    put_str(p, ")");
+    ab_cent(cx, y + 170, buf, t->sub, FONT_REGULAR);
 
-    font_draw(x + 124, y + 26, "EndixOS", t->text, FONT_TITLE);
-    font_draw(x + 125, y + 62, "Version " ENDIX_VERSION, t->sub, FONT_REGULAR);
-
-    i32 ry = y + 118;
-    about_row(x + 28, ry, "Processor", si ? si->cpu : "?");
-    char *p = put_u32(buf, si ? si->ram_mb : 0);
-    put_str(p, " MB");
-    about_row(x + 28, ry + 24, "Memory", buf);
-    p = put_u32(buf, si ? si->width : 0);
-    p = put_str(p, " x ");
-    put_u32(p, si ? si->height : 0);
-    about_row(x + 28, ry + 48, "Display", buf);
-    about_row(x + 28, ry + 72, "Kernel", "EndixOS i686, written from scratch");
+    ui_group(gx, y + AB_G_Y, GRP_W, AB_ROW * AB_ROWS);
+    const char *adapter = wifi_adapter();
+    char mem[24], disp[24];
+    p = put_u32(mem, si ? si->ram_mb : 0); put_str(p, " MB");
+    p = put_u32(disp, si ? si->width : 0); p = put_str(p, " x "); put_u32(p, si ? si->height : 0);
+    const char *lab[AB_ROWS] = { "Processor", "Memory", "Display", "Wi-Fi", "Kernel" };
+    const char *val[AB_ROWS] = { si ? si->cpu : "?", mem, disp, adapter[0] ? adapter : "not found", "EndixOS i686, from scratch" };
+    for (int i = 0; i < AB_ROWS; i++) {
+        i32 ry = y + AB_G_Y + i * AB_ROW;
+        if (i) ui_hline(gx + 16, ry, GRP_W - 16);
+        font_draw(gx + 16, ry + 9, lab[i], t->sub, FONT_REGULAR);
+        i32 vw = font_width(val[i], FONT_REGULAR);
+        font_draw(gx + GRP_W - 16 - (vw > GRP_W - 130 ? GRP_W - 130 : vw), ry + 9, val[i], t->text, FONT_REGULAR);
+    }
+    ui_button(gx, y + AB_UPD_Y, AB_UPD_W, 30, "Software Update...", 1, 0);
 }
 
 /* ---------- страницы ---------- */
@@ -184,14 +221,17 @@ static void draw_wallpapers(i32 x, i32 y)
 
     int n = scenery_count(), loaded = 0;              /* одна миниатюра за кадр */
     if (n > WALL_RENDERED) n = WALL_RENDERED;
-    for (int i = 0; i < n; i++) {
+    for (int i = 0, slot = 0; i < n; i++) {
+        if (scenery_hidden(i)) continue;
         i32 tx, ty;
-        thumb_pos(i, &tx, &ty);
+        thumb_pos(slot++, &tx, &ty);
         tx += x;
         ty += y;
+        if (thumb_ok[i] == 1 && thumb_ph[i] != scenery_night()) thumb_ok[i] = 0;       /* сменились день/ночь */
         if (!thumb_ok[i] && !loaded) {
             loaded = 1;
             thumb_ok[i] = scenery_paint(i, thumbs[i], THUMB_W, THUMB_H) ? 1 : 2;
+            thumb_ph[i] = (u8)scenery_night();
         }
         int sel = wall == WALL_COUNT + i;
         if (sel)
@@ -200,7 +240,7 @@ static void draw_wallpapers(i32 x, i32 y)
             fb_fill_round_rect(tx - 1, ty - 1, THUMB_W + 2, THUMB_H + 2, 5, RGB(0, 0, 0), 40);
         if (thumb_ok[i] == 1) fb_blit(tx, ty, thumbs[i], THUMB_W, THUMB_H);
         else fb_fill_round_rect(tx, ty, THUMB_W, THUMB_H, 6, t->card, 255);
-        const char *name = scenery_name(i);
+        const char *name = scenery_label(i);
         font_draw(tx + (THUMB_W - font_width(name, FONT_REGULAR)) / 2, ty + THUMB_H + 7,
                   name, sel ? t->text : t->sub, FONT_REGULAR);
     }
@@ -313,6 +353,79 @@ static void draw_themes(i32 x, i32 y)
     ui_switch(x + GRP_X + GRP_W - 52, y + GRP_Y + 5 * ROW_H + 9, wm_get_option(WM_OPT_REDUCE_TRANSP));
 }
 
+
+/* ---------- Значки приложений: стиль ---------- */
+#define IC_PV_Y 84
+#define IC_PV_H 96
+#define IC_SEG_W 300
+#define IC_SEG_X (GRP_X + GRP_W - 16 - IC_SEG_W)
+#define IC_ROW_Y (IC_PV_Y + IC_PV_H + 20)
+
+static void draw_icons(i32 x, i32 y)
+{
+    const theme_t *t = theme();
+    heading(x, y, "Icons", "Style of the app icons in the Dock and Launchpad");
+    i32 px = x + GRP_X, py = y + IC_PV_Y;
+    for (i32 i = 0; i < GRP_W; i++) {                                    /* пёстрый фон: сквозь стекло видно, что оно прозрачное */
+        u32 r = (u32)(60 + i * 150 / GRP_W), g = (u32)(70 + (GRP_W - i) * 80 / GRP_W), b = (u32)(200 - i * 80 / GRP_W);
+        fb_fill_rect(px + i, py, 1, IC_PV_H, RGB(r, g, b));
+    }
+    fb_fill_circle(px + 60, py + 30, 30, RGB(255, 214, 80));
+    fb_fill_circle(px + 360, py + 70, 34, RGB(60, 224, 230));
+    static const int ids[7] = { 0, 5, 1, 2, 3, 4, ICON_LAUNCHPAD };
+    for (int k = 0; k < 7; k++) icon_draw(ids[k], px + 14 + k * 58, py + 24, 48);
+    ui_group(x + GRP_X, y + IC_ROW_Y, GRP_W, ROW_H);
+    font_draw(x + GRP_X + 16, y + IC_ROW_Y + 13, "Icon style", t->text, FONT_REGULAR);
+    static const char *const labels[ICON_STYLE_COUNT] = { "Default", "Glass", "Mono", "Tinted" };
+    ui_segment(x + IC_SEG_X, y + IC_ROW_Y + 9, IC_SEG_W, labels, ICON_STYLE_COUNT, icon_style());
+    static const char *const hint[ICON_STYLE_COUNT] = {
+        "Colorful icons, as always.",
+        "Translucent glass tiles with a bright edge.",
+        "One color: dark glass tiles with light symbols.",
+        "One color: tiles and symbols use the accent color (Appearance)." };
+    font_draw(x + GRP_X + 2, y + IC_ROW_Y + ROW_H + 8, hint[icon_style()], t->sub, FONT_REGULAR);
+}
+
+
+/* ---------- Учётная запись: аватарка ---------- */
+#define AC_PV_Y 84
+#define AC_PV_H 96
+#define AC_CELL 46
+#define AC_GAP 4
+#define AC_COLS 8
+#define AC_GRID_Y (AC_PV_Y + AC_PV_H + 14)
+#define AC_GRID_H (2 * (AC_CELL + AC_GAP) + 12)
+#define AC_COL_Y (AC_GRID_Y + AC_GRID_H + 14)
+#define AC_COL_H 50
+
+static void draw_account(i32 x, i32 y)
+{
+    const theme_t *t = theme();
+    heading(x, y, "Account", "Your picture on the lock screen and in Settings");
+    ui_group(x + GRP_X, y + AC_PV_Y, GRP_W, AC_PV_H);
+    avatar_draw(x + GRP_X + 16 + 36, y + AC_PV_Y + AC_PV_H / 2, 36);
+    const char *u = login_user();
+    font_draw(x + GRP_X + 108, y + AC_PV_Y + 28, u && u[0] ? u : "endix", t->text, FONT_TITLE);
+    font_draw(x + GRP_X + 109, y + AC_PV_Y + 62, "EndixOS user", t->sub, FONT_REGULAR);
+
+    ui_group(x + GRP_X, y + AC_GRID_Y, GRP_W, AC_GRID_H);
+    i32 gx0 = x + GRP_X + (GRP_W - (AC_COLS * (AC_CELL + AC_GAP) - AC_GAP)) / 2;
+    for (int k = 0; k <= AVATAR_EMOJI; k++) {
+        i32 cx = gx0 + (k % AC_COLS) * (AC_CELL + AC_GAP), cy = y + AC_GRID_Y + 10 + (k / AC_COLS) * (AC_CELL + AC_GAP);
+        if (k == avatar_get()) fb_fill_round_rect(cx - 2, cy - 2, AC_CELL + 4, AC_CELL + 4, 12, theme_accent(), 255);
+        else fb_fill_round_rect(cx, cy, AC_CELL, AC_CELL, 10, t->side, 255);
+        avatar_draw_as(k, k == 0 ? 0 : avatar_color(), cx + AC_CELL / 2, cy + AC_CELL / 2, AC_CELL / 2 - 4);
+    }
+    ui_group(x + GRP_X, y + AC_COL_Y, GRP_W, AC_COL_H);
+    font_draw(x + GRP_X + 16, y + AC_COL_Y + 17, "Background", t->text, FONT_REGULAR);
+    for (int c = 0; c < AVATAR_COLORS; c++) {
+        i32 cx = x + GRP_X + GRP_W - 24 - (AVATAR_COLORS - 1 - c) * 28, cy = y + AC_COL_Y + AC_COL_H / 2;
+        if (c == avatar_color()) fb_fill_circle(cx, cy, 12, t->text);
+        fb_fill_circle(cx, cy, c == avatar_color() ? 10 : 11, avatar_color_rgb(c));
+    }
+    font_draw(x + GRP_X + 2, y + AC_COL_Y + AC_COL_H + 10, "The first picture is the default silhouette.", t->sub, FONT_REGULAR);
+}
+
 /* ---------- Liquid Glass ---------- */
 
 static const char *const glass_label[GLASS_PARAMS] = { "Refraction", "Blur", "Frost", "Edge light", "Vibrancy" };
@@ -320,8 +433,11 @@ static const char *const glass_label[GLASS_PARAMS] = { "Refraction", "Blur", "Fr
 #define PV_H 116
 #define RST_Y (GRP_Y + GLASS_PARAMS * ROW_H + 12)
 
-#define RES_Y 160
-#define RES_ROW 30
+#define PERF_Y 136
+#define PERF_W 250
+#define PERF_X (GRP_X + GRP_W - 16 - PERF_W)
+#define RES_Y 252
+#define RES_ROW 26
 static int res_sel = -1;
 static const char *res_msg = "";
 
@@ -332,6 +448,14 @@ static void draw_display(i32 x, i32 y)
     ui_group(x + GRP_X, y + 84, GRP_W, ROW_H);
     font_draw(x + GRP_X + 16, y + 84 + 13, "Brightness", t->text, FONT_REGULAR);
     ui_slider(x + SL_X, y + 84 + ROW_H / 2, SL_W, (cc_brightness() - 20) * 100 / 80, 1);
+    ui_group(x + GRP_X, y + PERF_Y, GRP_W, ROW_H);
+    font_draw(x + GRP_X + 16, y + PERF_Y + 13, "Performance", t->text, FONT_REGULAR);
+    static const char *const perf_labels[PERF_MODES] = { "Auto", "High", "Balanced", "Fast" };
+    ui_segment(x + PERF_X, y + PERF_Y + 9, PERF_W, perf_labels, PERF_MODES, perf_mode());
+    {
+        static const char *const lv[3] = { "Full quality", "Lighter glass, no shadows", "No glass blur, no shadows" };
+        font_draw(x + GRP_X + 2, y + PERF_Y + ROW_H + 8, lv[perf_level()], t->sub, FONT_REGULAR);
+    }
     font_draw(x + GRP_X + 2, y + RES_Y - 22, "Resolution (applies after restart)", t->sub, FONT_BOLD);
     ui_group(x + GRP_X, y + RES_Y, GRP_W, res_count() * RES_ROW);
     int cur = res_current();
@@ -345,6 +469,113 @@ static void draw_display(i32 x, i32 y)
     else if (!res_available()) font_draw(x + GRP_X + 2, y + RES_Y + res_count() * RES_ROW + 10, "Saving is available on an installed system.", t->sub, FONT_REGULAR);
 }
 
+/* ---------- Wi-Fi ---------- */
+#define WF_LIST_Y (84 + ROW_H + 76)
+static int wf_sel = -1, wf_focus, wf_pwn; static char wf_pw[64];
+static void draw_lock(i32 x, i32 y, u32 c)
+{
+    fb_fill_round_rect(x, y + 5, 11, 8, 2, c, 255);
+    fb_fill_round_rect(x + 2, y, 7, 3, 1, c, 255); fb_fill_round_rect(x + 3, y + 2, 5, 3, 1, c, 255);
+}
+static const char *fit_text(const char *s, int maxw, int font)
+{
+    static char buf[4][72]; static int bi;
+    char *o = buf[bi++ & 3]; int n = 0;
+    while (s[n] && n < 60) { o[n] = s[n]; n++; }
+    o[n] = 0;
+    if (font_width(o, font) <= maxw) return o;
+    while (n > 1) { n--; o[n] = '.'; o[n+1] = '.'; o[n+2] = '.'; o[n+3] = 0; if (font_width(o, font) <= maxw) return o; }
+    return o;
+}
+
+static void draw_wifi(i32 x, i32 y)
+{
+    const theme_t *t = theme();
+    wifi_refresh();
+    heading(x, y, "Wi-Fi", "Connect to a wireless network");
+    int s = wifi_state();
+    ui_group(x + GRP_X, y + 84, GRP_W, ROW_H);
+    font_draw(x + GRP_X + 16, y + 84 + 13, "Wi-Fi", t->text, FONT_REGULAR);
+    ui_switch(x + GRP_X + GRP_W - 56, y + 84 + 10, s == WIFI_ON || s == WIFI_STARTING);
+    font_draw(x + GRP_X + 2, y + 84 + ROW_H + 10, wifi_adapter()[0] ? wifi_adapter() : "No adapter", t->sub, FONT_BOLD);
+    font_draw(x + GRP_X + 2, y + 84 + ROW_H + 28, fit_text(wifi_message(), GRP_W - 4, FONT_REGULAR), t->sub, FONT_REGULAR);
+    if (s == WIFI_STARTING || wifi_busy()) {
+        static int spin;
+        spin++;
+        for (int k = 0; k < 8; k++) {
+            static const i8 sx[8] = { 0, 7, 10, 7, 0, -7, -10, -7 }, sy[8] = { -10, -7, 0, 7, 10, 7, 0, -7 };
+            int a = 40 + ((8 + k - (spin / 2) % 8) % 8) * 26;
+            fb_fill_circle(x + GRP_X + GRP_W - 80 + sx[k], y + 84 + ROW_H / 2 + sy[k] * 6 / 10, 2, RGB(a, a, a + 6 > 255 ? 255 : a + 6));
+        }
+    }
+    if (s == WIFI_ON) {
+        font_draw(x + GRP_X + 2, y + WF_LIST_Y - 20, "Networks", t->sub, FONT_BOLD);
+        if (wf_sel < 0) ui_button(x + GRP_X + GRP_W - 70, y + WF_LIST_Y - 26, 70, 24, "Scan", !wifi_busy(), 0);
+        if (wf_sel >= 0) {                                           /* ввод пароля */
+            ui_group(x + GRP_X, y + WF_LIST_Y, GRP_W, ROW_H * 2 + 8);
+            font_draw(x + GRP_X + 16, y + WF_LIST_Y + 12, "Password for", t->sub, FONT_REGULAR);
+            font_draw(x + GRP_X + 112, y + WF_LIST_Y + 12, fit_text(wifi_net_name(wf_sel), GRP_W - 130, FONT_BOLD), t->text, FONT_BOLD);
+            char dots[66]; int i = 0; for (; i < wf_pwn && i < 40; i++) dots[i] = '*'; dots[i] = 0;
+            fb_fill_round_rect(x + GRP_X + 16, y + WF_LIST_Y + 36, GRP_W - 32, 28, 6, t->body, 255);
+            font_draw(x + GRP_X + 24, y + WF_LIST_Y + 43, dots, t->text, FONT_REGULAR);
+            if (wf_focus) fb_fill_rect(x + GRP_X + 26 + font_width(dots, FONT_REGULAR), y + WF_LIST_Y + 41, 1, 16, t->text);
+            if (wf_pwn == 0) font_draw(x + GRP_X + 24, y + WF_LIST_Y + 43, "Enter password", t->sub, FONT_REGULAR);
+            ui_button(x + GRP_X + GRP_W - 180, y + WF_LIST_Y + ROW_H * 2 + 20, 80, 28, "Cancel", 1, 0);
+            ui_button(x + GRP_X + GRP_W - 90, y + WF_LIST_Y + ROW_H * 2 + 20, 90, 28, "Join", wf_pwn >= 8, 1);
+        } else {
+            int n = wifi_net_count(); if (n > WIFI_SHOW) n = WIFI_SHOW;
+            ui_group(x + GRP_X, y + WF_LIST_Y, GRP_W, (n ? n : 1) * ROW_H);
+            if (!n) font_draw(x + GRP_X + 16, y + WF_LIST_Y + 13, wifi_busy() ? "Searching..." : "No networks found", t->sub, FONT_REGULAR);
+            for (int k = 0; k < n; k++) {
+                i32 ry = y + WF_LIST_Y + k * ROW_H;
+                if (k) ui_hline(x + GRP_X + 16, ry, GRP_W - 32);
+                int c = wifi_net_connected(k), sec = wifi_net_secure(k);
+                font_draw(x + GRP_X + 16, ry + 13, fit_text(wifi_net_name(k), (c || sec == 2) ? GRP_W - 180 : GRP_W - 90, c ? FONT_BOLD : FONT_REGULAR), sec == 2 ? t->sub : t->text, c ? FONT_BOLD : FONT_REGULAR);
+                if (c) font_draw(x + GRP_X + GRP_W - 150, ry + 13, "Connected", t->sub, FONT_REGULAR);
+                else if (sec == 2) font_draw(x + GRP_X + GRP_W - 150, ry + 13, "Not supported", t->sub, FONT_REGULAR);
+                if (sec == 1) draw_lock(x + GRP_X + GRP_W - 62, ry + 14, t->text);
+                for (int b = 0; b < 4; b++)
+                    fb_fill_round_rect(x + GRP_X + GRP_W - 40 + b * 7, ry + 26 - b * 4, 4, 5 + b * 4, 1, b < wifi_net_signal(k) ? t->text : t->sub, b < wifi_net_signal(k) ? 255 : 90);
+            }
+        }
+    }
+    wifi_step();
+}
+
+static int wifi_page_click(i32 rx, i32 ry)
+{
+    int s = wifi_state();
+    if (in_rect(rx, ry, GRP_X, 84, GRP_W, ROW_H)) { wifi_refresh(); wf_sel = -1; wf_focus = 0; wifi_set_enabled(s != WIFI_ON && s != WIFI_STARTING); return 1; }
+    if (s != WIFI_ON) return 0;
+    if (wf_sel >= 0) {
+        if (in_rect(rx, ry, GRP_X + GRP_W - 90, WF_LIST_Y + ROW_H * 2 + 20, 90, 28)) { if (wf_pwn >= 8 && wifi_connect(wf_sel, wf_pw) == 0) { wf_sel = -1; wf_focus = 0; } return 1; }
+        if (in_rect(rx, ry, GRP_X + GRP_W - 180, WF_LIST_Y + ROW_H * 2 + 20, 80, 28)) { wf_sel = -1; wf_focus = 0; return 1; }
+        wf_focus = in_rect(rx, ry, GRP_X + 16, WF_LIST_Y + 36, GRP_W - 32, 28);
+        return 1;
+    }
+    if (in_rect(rx, ry, GRP_X + GRP_W - 70, WF_LIST_Y - 26, 70, 24)) { wifi_scan(); return 1; }
+    int n = wifi_net_count(); if (n > WIFI_SHOW) n = WIFI_SHOW;
+    for (int k = 0; k < n; k++)
+        if (in_rect(rx, ry, GRP_X, WF_LIST_Y + k * ROW_H, GRP_W, ROW_H)) {
+            int sec = wifi_net_secure(k);
+            if (wifi_net_connected(k)) wifi_disconnect();
+            else if (sec == 0) wifi_connect(k, "");
+            else if (sec == 1 && !wifi_busy()) { wf_sel = k; wf_pwn = 0; wf_pw[0] = 0; wf_focus = 1; }
+            return 1;
+        }
+    return 0;
+}
+static int wifi_page_key(i32 key)
+{
+    if (wf_sel < 0 || !wf_focus) return 0;
+    if (key == 27) { wf_sel = -1; wf_focus = 0; }
+    else if (key == '\b') { if (wf_pwn) wf_pw[--wf_pwn] = 0; }
+    else if (key == '\n') { if (wf_pwn >= 8 && wifi_connect(wf_sel, wf_pw) == 0) { wf_sel = -1; wf_focus = 0; } }
+    else if (key >= 32 && key < 127 && wf_pwn < 63) { wf_pw[wf_pwn++] = (char)key; wf_pw[wf_pwn] = 0; }
+    else return 0;
+    return 1;
+}
+
 static void draw_sound(i32 x, i32 y)
 {
     const theme_t *t = theme();
@@ -354,6 +585,113 @@ static void draw_sound(i32 x, i32 y)
     ui_slider(x + SL_X, y + 84 + ROW_H / 2, SL_W, cc_volume(), 1);
 }
 
+__attribute__((weak)) int ps2_tp_present(void) { return 0; }
+__attribute__((weak)) void ps2_tp_get(int *a, int *b, int *c) { *a = 50; *b = 1; *c = 1; }
+__attribute__((weak)) void ps2_tp_set(int a, int b, int c) { (void)a; (void)b; (void)c; }
+
+static void draw_trackpad(i32 x, i32 y)
+{
+    const theme_t *t = theme();
+    int sp, tap, nat;
+    ps2_tp_get(&sp, &tap, &nat);
+    heading(x, y, "Trackpad", ps2_tp_present() ? "Synaptics touchpad detected" : "No touchpad detected: using the standard mouse");
+    ui_group(x + GRP_X, y + 84, GRP_W, ROW_H * 3);
+    font_draw(x + GRP_X + 16, y + 84 + 13, "Tracking speed", t->text, FONT_REGULAR);
+    ui_slider(x + SL_X, y + 84 + ROW_H / 2, SL_W, sp, 1);
+    ui_hline(x + GRP_X + 16, y + 84 + ROW_H, GRP_W - 32);
+    font_draw(x + GRP_X + 16, y + 84 + ROW_H + 13, "Tap to click", t->text, FONT_REGULAR);
+    ui_switch(x + GRP_X + GRP_W - 52, y + 84 + ROW_H + 9, tap);
+    ui_hline(x + GRP_X + 16, y + 84 + 2 * ROW_H, GRP_W - 32);
+    font_draw(x + GRP_X + 16, y + 84 + 2 * ROW_H + 13, "Natural scrolling", t->text, FONT_REGULAR);
+    ui_switch(x + GRP_X + GRP_W - 52, y + 84 + 2 * ROW_H + 9, nat);
+    font_draw(x + GRP_X, y + 84 + 3 * ROW_H + 14, "Tap with two fingers for a right click. Scroll with two fingers.", t->sub, FONT_REGULAR);
+}
+
+/* ---------- Date & Time ---------- */
+#define DT_A_Y 84
+#define DT_S_Y (DT_A_Y + 3 * ROW_H)
+#define DT_B_Y (DT_S_Y + 66)
+static u32 dr[5];                                       /* черновик: день, месяц, год, час, минуты */
+static int dr_ok;
+static const char *const mon_name[12] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+
+static char *put_num(char *p, u32 v, int w)
+{
+    char t[10]; int n = 0;
+    do { t[n++] = (char)('0' + v % 10); v /= 10; } while (v);
+    for (int i = n; i < w; i++) *p++ = '0';
+    while (n) *p++ = t[--n];
+    return p;
+}
+static void dt_draft(void)
+{
+    if (dr_ok) return;
+    u32 h, m, d, mo, y;
+    ts_now(&h, &m, &d, &mo, &y);
+    dr[0] = d; dr[1] = mo; dr[2] = y; dr[3] = h; dr[4] = m;
+    dr_ok = 1;
+}
+static void dt_step(int k, int dir)
+{
+    dt_draft();
+    static const int lo[5] = { 1, 1, 2020, 0, 0 }, hi[5] = { 31, 12, 2099, 23, 59 };
+    int v = (int)dr[k] + dir, mx = hi[k];
+    if (k == 0) mx = ts_days_in_month(dr[2], dr[1]);
+    if (v > mx) v = (k == 2) ? mx : lo[k];
+    if (v < lo[k]) v = (k == 2) ? lo[k] : mx;
+    dr[k] = (u32)v;
+    int dm = ts_days_in_month(dr[2], dr[1]);
+    if ((int)dr[0] > dm) dr[0] = (u32)dm;
+}
+static void dt_stepper_pos(int k, i32 *cx, i32 *cy) { *cx = GRP_X + 10 + (k % 3) * 138; *cy = DT_B_Y + (k < 3 ? 0 : ROW_H) + 9; }
+#define DT_TZ_PX (GRP_X + GRP_W - 16 - 26)
+
+static void draw_datetime(i32 x, i32 y)
+{
+    const theme_t *t = theme();
+    ts_poll();
+    dt_draft();
+    heading(x, y, "Date & Time", "Set the clock, the time zone and automatic sync");
+    u32 h, m, d, mo, yr;
+    ts_now(&h, &m, &d, &mo, &yr);
+    char b[40], *p = b;
+    p = put_num(p, d, 2); *p++ = ' '; for (const char *q = mon_name[(mo + 11) % 12]; *q; q++) *p++ = *q;
+    *p++ = ' '; p = put_num(p, yr, 4); *p++ = ','; *p++ = ' '; p = put_num(p, h, 2); *p++ = ':'; p = put_num(p, m, 2); *p = 0;
+    ui_group(x + GRP_X, y + DT_A_Y, GRP_W, ROW_H * 3);
+    font_draw(x + GRP_X + 16, y + DT_A_Y + 13, "Current time", t->text, FONT_REGULAR);
+    font_draw(x + GRP_X + GRP_W - 16 - font_width(b, FONT_REGULAR), y + DT_A_Y + 13, b, t->sub, FONT_REGULAR);
+    ui_hline(x + GRP_X + 16, y + DT_A_Y + ROW_H, GRP_W - 32);
+    font_draw(x + GRP_X + 16, y + DT_A_Y + ROW_H + 13, "Time zone", t->text, FONT_REGULAR);
+    int tz = ts_tz(), at = tz < 0 ? -tz : tz;
+    p = b; for (const char *q = "UTC"; *q; q++) *p++ = *q;
+    *p++ = tz < 0 ? '-' : '+'; p = put_num(p, (u32)at / 60, 2); *p++ = ':'; p = put_num(p, (u32)at % 60, 2); *p = 0;
+    i32 ty = y + DT_A_Y + ROW_H + 9;
+    ui_button(x + DT_TZ_PX - 96 - 26, ty, 26, 24, "-", 1, 0);
+    font_draw(x + DT_TZ_PX - 96 + (96 - font_width(b, FONT_REGULAR)) / 2, ty + 4, b, t->text, FONT_REGULAR);
+    ui_button(x + DT_TZ_PX, ty, 26, 24, "+", 1, 0);
+    ui_hline(x + GRP_X + 16, y + DT_A_Y + 2 * ROW_H, GRP_W - 32);
+    font_draw(x + GRP_X + 16, y + DT_A_Y + 2 * ROW_H + 13, "Set automatically", t->text, FONT_REGULAR);
+    ui_switch(x + GRP_X + GRP_W - 52, y + DT_A_Y + 2 * ROW_H + 9, ts_auto());
+    font_draw(x + GRP_X, y + DT_S_Y + 14, ts_msg()[0] ? ts_msg() : "Time comes from the internet (needs a connection).", t->sub, FONT_REGULAR);
+    ui_button(x + GRP_X + GRP_W - 96, y + DT_S_Y + 6, 96, 28, ts_state() == TS_BUSY ? "Syncing..." : "Sync now", ts_state() != TS_BUSY, 0);
+    font_draw(x + GRP_X, y + DT_B_Y - 20, "Set manually", t->sub, FONT_REGULAR);
+    ui_group(x + GRP_X, y + DT_B_Y, GRP_W, ROW_H * 2);
+    ui_hline(x + GRP_X + 16, y + DT_B_Y + ROW_H, GRP_W - 32);
+    static const char *const lab[5] = { "Day", "Month", "Year", "Hour", "Min" };
+    for (int k = 0; k < 5; k++) {
+        i32 cx, cy;
+        dt_stepper_pos(k, &cx, &cy);
+        cx += x; cy += y;
+        font_draw(cx, cy + 4, lab[k], t->sub, FONT_REGULAR);
+        ui_button(cx + 44, cy, 22, 24, "-", 1, 0);
+        if (k == 1) { for (p = b, h = 0; mon_name[dr[1] - 1][h]; h++) *p++ = mon_name[dr[1] - 1][h]; *p = 0; }
+        else { p = put_num(b, dr[k], k == 2 ? 4 : 2); *p = 0; }
+        font_draw(cx + 66 + (40 - font_width(b, FONT_REGULAR)) / 2, cy + 4, b, t->text, FONT_REGULAR);
+        ui_button(cx + 106, cy, 22, 24, "+", 1, 0);
+    }
+    { i32 cx, cy; dt_stepper_pos(5, &cx, &cy); ui_button(x + cx + 6, y + cy - 2, 100, 28, "Set", 1, 1); }
+}
+
 /* ---------- Software Update ---------- */
 static int up_shown, up_spin, up_drawn = -1;
 #define UP_BTN_W 150
@@ -361,7 +699,7 @@ static int up_shown, up_spin, up_drawn = -1;
 #define UP_GRP_Y 340
 
 static int up_busy(void) { int s = update_state(); return s == UP_CHECKING || s == UP_DOWNLOADING || s == UP_INSTALLING; }
-int settings_animating(void) { return page == PAGE_UPDATE && (up_busy() || up_drawn != update_state()); }
+int settings_animating(void) { return (page == PAGE_WIFI && (wifi_state() == WIFI_STARTING || wifi_busy())) || (page == PAGE_UPDATE && (up_busy() || up_drawn != update_state())) || (page == PAGE_DATETIME && ts_state() == TS_BUSY); }
 
 static void up_center(i32 cx, i32 y, const char *s, u32 c, int font) { font_draw(cx - font_width(s, font) / 2, y, s, c, font); }
 
@@ -525,16 +863,15 @@ void settings_draw(i32 x, i32 y, i32 w, i32 h)
     }
 
     /* учётная запись */
-    fb_fill_circle(x + 36, y + 66, 17, theme_accent());
-    logo_draw(x + 36 - 10, y + 66 - 10, 20, RGB(255, 255, 255));
-    font_draw(x + 62, y + 50, "endix", t->text, FONT_BOLD);
+    avatar_draw(x + 36, y + 66, 17);
+    { const char *un = login_user(); font_draw(x + 62, y + 50, un && un[0] ? un : "endix", t->text, FONT_BOLD); }
     font_draw(x + 62, y + 68, "EndixOS user", t->sub, FONT_REGULAR);
 
     int vp[PAGE_COUNT], nv = vis_pages(vp);
     if (!nv) font_draw(x + 18, y + SIDE_ITEMS_Y + 6, "No Results", t->sub, FONT_REGULAR);
     for (int v = 0; v < nv; v++) {
         int i = vp[v];
-        i32 ix = x + 10, iy = y + SIDE_ITEMS_Y + v * 34;
+        i32 ix = x + 10, iy = y + SIDE_ITEMS_Y + v * SIDE_PITCH;
         int sel = (i == page);
         if (sel)
             fb_fill_round_rect(ix, iy, SIDEBAR_W - 20, 28, 7, theme_accent(), 255);
@@ -544,20 +881,31 @@ void settings_draw(i32 x, i32 y, i32 w, i32 h)
         } else {
             if (i == PAGE_DISPLAY) ui_squircle_icon(G_APPEAR, ix + 6, iy + 4, 20, RGB(52, 120, 246));
             else if (i == PAGE_SOUND) ui_squircle_icon(G_MUSIC, ix + 6, iy + 4, 20, RGB(255, 69, 58));
+            else if (i == PAGE_TRACKPAD) ui_squircle_icon(G_DISK, ix + 6, iy + 4, 20, RGB(142, 142, 147));
+            else if (i == PAGE_DATETIME) icon_draw(ICON_APP_CLOCK, ix + 6, iy + 4, 20);
+            else if (i == PAGE_WIFI) ui_squircle_icon(G_INFO, ix + 6, iy + 4, 20, RGB(10, 132, 255));
             else if (i == PAGE_UPDATE) ui_squircle_icon(G_DOWN, ix + 6, iy + 4, 20, RGB(142, 142, 147));
+            else if (i == PAGE_ICONS) icon_draw(ICON_LAUNCHPAD, ix + 6, iy + 4, 20);
+            else if (i == PAGE_ACCOUNT) avatar_draw_as(avatar_get(), avatar_color(), ix + 16, iy + 14, 10);
             else icon_draw(i == PAGE_WALL ? ICON_TILE_WALL : i == PAGE_GLASS ? ICON_TILE_GLASS : ICON_TILE_APPEAR, ix + 6, iy + 4, 20);
         }
         font_draw(ix + 36, iy + 5, page_name[i], sel ? RGB(255, 255, 255) : t->text, FONT_REGULAR);
     }
 
+    if (page != PAGE_DATETIME) dr_ok = 0;
     switch (page) {
     case PAGE_WALL:   draw_wallpapers(x, y); break;
     case PAGE_PHOTOS: draw_photos(x, y);     break;
     case PAGE_THEMES: draw_themes(x, y);     break;
     case PAGE_GLASS:  draw_glass(x, y);      break;
+    case PAGE_ICONS:  draw_icons(x, y);      break;
     case PAGE_DISPLAY: draw_display(x, y);   break;
     case PAGE_SOUND:  draw_sound(x, y);      break;
+    case PAGE_TRACKPAD: draw_trackpad(x, y); break;
+    case PAGE_DATETIME: draw_datetime(x, y); break;
+    case PAGE_WIFI:   draw_wifi(x, y);       break;
     case PAGE_UPDATE: draw_update(x, y);     break;
+    case PAGE_ACCOUNT: draw_account(x, y);   break;
     case PAGE_ABOUT:  about_draw(x + SIDEBAR_W, y); break;
     }
 }
@@ -566,19 +914,21 @@ int settings_click(i32 rx, i32 ry)
 {
     sq_focus = in_rect(rx, ry, 10, 10, SIDEBAR_W - 20, 26);
     if (sq_focus) return 1;
+    if (in_rect(rx, ry, 10, 46, SIDEBAR_W - 20, 40)) { page = PAGE_ACCOUNT; return 1; }       /* карточка пользователя */
     {
         int vp[PAGE_COUNT], nv = vis_pages(vp);
         for (int v = 0; v < nv; v++)
-            if (in_rect(rx, ry, 10, SIDE_ITEMS_Y + v * 34, SIDEBAR_W - 20, 28)) {
+            if (in_rect(rx, ry, 10, SIDE_ITEMS_Y + v * SIDE_PITCH, SIDEBAR_W - 20, 28)) {
                 page = vp[v];
                 return 1;
             }
     }
 
     if (page == PAGE_WALL) {
-        for (int i = 0; i < scenery_count() && i < WALL_RENDERED; i++) {
+        for (int i = 0, slot = 0; i < scenery_count() && i < WALL_RENDERED; i++) {
+            if (scenery_hidden(i)) continue;
             i32 tx, ty;
-            thumb_pos(i, &tx, &ty);
+            thumb_pos(slot++, &tx, &ty);
             if (in_rect(rx, ry, tx, ty, THUMB_W, THUMB_H)) {
                 settings_set_wallpaper(WALL_COUNT + i);
                 return 1;
@@ -590,6 +940,11 @@ int settings_click(i32 rx, i32 ry)
             settings_drag(rx);
             return 1;
         }
+        if (page == PAGE_DISPLAY && in_rect(rx, ry, PERF_X, PERF_Y, PERF_W, ROW_H)) {
+            int k = (rx - PERF_X) * PERF_MODES / PERF_W;
+            perf_set_mode(k < 0 ? 0 : (k >= PERF_MODES ? PERF_MODES - 1 : k));
+            return 1;
+        }
         if (page == PAGE_DISPLAY)
             for (int i = 0; i < res_count(); i++)
                 if (in_rect(rx, ry, GRP_X, RES_Y + i * RES_ROW, GRP_W, RES_ROW)) {
@@ -597,6 +952,26 @@ int settings_click(i32 rx, i32 ry)
                     res_apply(i, &res_msg);
                     return 1;
                 }
+    } else if (page == PAGE_TRACKPAD) {
+        int sp, tap, nat;
+        ps2_tp_get(&sp, &tap, &nat);
+        if (in_rect(rx, ry, SL_X - 12, 84, SL_W + 24, ROW_H)) { sl_drag = 22; settings_drag(rx); return 1; }
+        if (in_rect(rx, ry, GRP_X, 84 + ROW_H, GRP_W, ROW_H)) { ps2_tp_set(sp, !tap, nat); return 1; }
+        if (in_rect(rx, ry, GRP_X, 84 + 2 * ROW_H, GRP_W, ROW_H)) { ps2_tp_set(sp, tap, !nat); return 1; }
+    } else if (page == PAGE_DATETIME) {
+        dt_draft();
+        if (in_rect(rx, ry, DT_TZ_PX - 96 - 26, DT_A_Y + ROW_H + 9, 26, 24)) { ts_set_tz(ts_tz() - 30); return 1; }
+        if (in_rect(rx, ry, DT_TZ_PX, DT_A_Y + ROW_H + 9, 26, 24)) { ts_set_tz(ts_tz() + 30); return 1; }
+        if (in_rect(rx, ry, GRP_X, DT_A_Y + 2 * ROW_H, GRP_W, ROW_H)) { ts_set_auto(!ts_auto()); return 1; }
+        if (in_rect(rx, ry, GRP_X + GRP_W - 96, DT_S_Y + 6, 96, 28)) { ts_sync(); return 1; }
+        for (int k = 0; k < 5; k++) {
+            i32 cx, cy;
+            dt_stepper_pos(k, &cx, &cy);
+            if (in_rect(rx, ry, cx + 44, cy, 22, 24)) { dt_step(k, -1); return 1; }
+            if (in_rect(rx, ry, cx + 106, cy, 22, 24)) { dt_step(k, 1); return 1; }
+        }
+        { i32 cx, cy; dt_stepper_pos(5, &cx, &cy);
+          if (in_rect(rx, ry, cx + 6, cy - 2, 100, 28)) { ts_apply(dr[2], dr[1], dr[0], dr[3], dr[4]); dr_ok = 0; return 1; } }
     } else if (page == PAGE_PHOTOS) {
         for (int i = 0; i < photos_count(); i++) {
             i32 tx, ty;
@@ -606,6 +981,8 @@ int settings_click(i32 rx, i32 ry)
                 return 1;
             }
         }
+    } else if (page == PAGE_WIFI) {
+        if (wifi_page_click(rx, ry)) return 1;
     } else if (page == PAGE_UPDATE) {
         i32 cx = GRP_X + GRP_W / 2;
         int s = update_state();
@@ -616,6 +993,20 @@ int settings_click(i32 rx, i32 ry)
             return 1;
         }
         if (in_rect(rx, ry, GRP_X, UP_GRP_Y, GRP_W, ROW_H)) { update_set_auto(!update_auto()); return 1; }
+    } else if (page == PAGE_ACCOUNT) {
+        i32 gx0 = GRP_X + (GRP_W - (AC_COLS * (AC_CELL + AC_GAP) - AC_GAP)) / 2;
+        for (int k = 0; k <= AVATAR_EMOJI; k++)
+            if (in_rect(rx, ry, gx0 + (k % AC_COLS) * (AC_CELL + AC_GAP), AC_GRID_Y + 10 + (k / AC_COLS) * (AC_CELL + AC_GAP), AC_CELL, AC_CELL)) { avatar_set(k); return 1; }
+        for (int c = 0; c < AVATAR_COLORS; c++)
+            if (in_rect(rx, ry, GRP_X + GRP_W - 24 - (AVATAR_COLORS - 1 - c) * 28 - 13, AC_COL_Y + AC_COL_H / 2 - 13, 26, 26)) { avatar_set_color(c); return 1; }
+    } else if (page == PAGE_ABOUT) {
+        if (in_rect(rx, ry, GRP_X, AB_UPD_Y, AB_UPD_W, 30)) { page = PAGE_UPDATE; return 1; }
+    } else if (page == PAGE_ICONS) {
+        if (in_rect(rx, ry, IC_SEG_X, IC_ROW_Y, IC_SEG_W, ROW_H)) {
+            int k = (rx - IC_SEG_X) * ICON_STYLE_COUNT / IC_SEG_W;
+            icon_set_style(k < 0 ? 0 : (k >= ICON_STYLE_COUNT ? ICON_STYLE_COUNT - 1 : k));
+            return 1;
+        }
     } else if (page == PAGE_GLASS) {
         for (int i = 0; i < GLASS_PARAMS; i++)
             if (in_rect(rx, ry, SL_X - 12, GRP_Y + i * ROW_H, SL_W + 24, ROW_H)) {
@@ -706,17 +1097,7 @@ void about_window_draw(i32 x, i32 y, i32 w, i32 h)
     const theme_t *t = theme();
     i32 cx = x + w / 2;
 
-    /* ноутбук EndixOS PC */
-    i32 lx = cx - 64, ly = y + 26;
-    fb_fill_round_rect(lx, ly, 128, 84, 7, RGB(28, 28, 32), 255);
-    for (i32 j = 0; j < 76; j++) {
-        u32 r = (u32)(58 + j * 40 / 76), g = (u32)(134 + j * 44 / 76), b = (u32)(214 + j * 26 / 76);
-        fb_fill_rect(lx + 5, ly + 4 + j, 118, 1, RGB(r, g, b));
-    }
-    logo_draw(cx - 22, ly + 16, 44, RGB(255, 255, 255));
-    fb_fill_round_rect(cx - 15, ly, 30, 6, 3, RGB(28, 28, 32), 255);
-    fb_fill_round_rect(cx - 82, ly + 84, 164, 7, 3, RGB(206, 207, 212), 255);
-    fb_fill_round_rect(cx - 22, ly + 84, 44, 3, 1, RGB(160, 161, 168), 255);
+    about_laptop(cx, y + 26);
 
     ab_center(cx, y + 150, "EndixOS PC", t->text, FONT_TITLE);
     ab_center(cx, y + 190, "Version " ENDIX_VERSION ", 2026", t->sub, FONT_REGULAR);
@@ -762,6 +1143,7 @@ void settings_drag(i32 rx)
     v = v < 0 ? 0 : (v > 100 ? 100 : v);
     if (sl_drag == 20) cc_set_brightness(20 + v * 80 / 100);
     else if (sl_drag == 21) cc_set_volume(v);
+    else if (sl_drag == 22) { int sp, tap, nat; ps2_tp_get(&sp, &tap, &nat); ps2_tp_set(v, tap, nat); }
     else if (sl_drag >= 2) fb_glass_param_set(sl_drag - 2, v);
     else wm_set_option(WM_OPT_DOCK_ZOOM, v);
 }
@@ -770,6 +1152,7 @@ void settings_release(void) { sl_drag = 0; }
 
 int settings_key(i32 key)
 {
+    if (page == PAGE_WIFI && wifi_page_key(key)) return 1;
     if (!sq_focus) return 0;
     if (key == 27) { sqn = 0; sq[0] = 0; sq_focus = 0; }
     else if (key == '\b') { if (sqn) sq[--sqn] = 0; }

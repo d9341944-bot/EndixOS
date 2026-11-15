@@ -615,6 +615,30 @@ static void cmd_disks(void)
     }
 }
 
+static int usb_ls_cb(void *c, const char *name, const char *alias, u32 size, int is_dir)
+{
+    (void)c; (void)alias; char b[16];
+    term_puts(is_dir ? "  [dir]  " : "  "); term_puts(name);
+    if (!is_dir) { term_puts("  "); u_put(b, (int)size); term_puts(b); }
+    term_putc('\n'); return 0;
+}
+
+static void cmd_usb(char *arg)
+{
+    if (arg[0] == 'l' && arg[1] == 's') {                        /* usb ls [путь]: каталог на флешке (FAT32, только чтение) */
+        if (!usb_drive_count()) usb_scan();
+        blk_t *b = usb_blk(0); fat_t f;
+        if (!b) { term_puts("usb: no storage device (run: usb)\n"); return; }
+        const char *p = arg + 2; while (*p == ' ') p++;
+        if (fat_mount(b, 0, &f) != 0) { u8 sec[512], ty; u32 st, sz; if (b->rd(b->ctx, 0, 1, sec) == 0 && mbr_get_part(b, 0, &ty, &st, &sz) == 0 && fat_mount(b, st, &f) == 0) { } else { term_puts("usb: no FAT32 file system found\n"); return; } }
+        if (fat_list(&f, p[0] ? p : "/", usb_ls_cb, 0) < 0) term_puts("usb: cannot list that path\n");
+        return;
+    }
+    usb_scan();
+    term_puts(usb_log());
+    char b[16]; u_put(b, usb_drive_count()); term_puts("storage devices: "); term_puts(b); term_puts("\n");
+}
+
 static void cmd_lspci(void)
 {
     static const char hx[] = "0123456789abcdef";
@@ -667,6 +691,66 @@ static void cmd_ifconfig(void)
     net_ip_fmt(i.dns, b);  term_puts("  dns "); term_puts(b); term_putc('\n');
 }
 
+static const char HX[] = "0123456789ABCDEF";
+static int hex_tok(const char **pp)                       /* следующее число в 16-ричном виде; -1 - нет */
+{
+    const char *p = *pp;
+    while (*p == ' ') p++;
+    if (!*p) { *pp = p; return -1; }
+    int v = 0, n = 0;
+    for (; *p && *p != ' '; p++, n++) {
+        int c = *p, d = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+        if (d < 0) { v = -2; }
+        else if (v >= 0) v = v * 16 + d;
+    }
+    *pp = p;
+    return n && v >= 0 && v < 256 ? v : -2;
+}
+static void put_hex2(int v) { char b[3] = { HX[(v >> 4) & 15], HX[v & 15], 0 }; term_puts(b); }
+static void put_dec3(int v) { char b[5]; int n = 0; if (v >= 100) b[n++] = (char)('0' + v / 100); if (v >= 10) b[n++] = (char)('0' + v / 10 % 10); b[n++] = (char)('0' + v % 10); b[n] = 0; term_puts(b); }
+
+static void cmd_battery(char *arg)
+{
+    const char *p = arg;
+    if (s_eq(arg, "off")) { bat_config(-1, -1, 1); term_puts("battery: off\n"); return; }
+    if (s_eq(arg, "auto")) {
+        int cnt, off; bat_autodetect(); off = bat_autodetect_info(&cnt);
+        term_puts("battery auto: candidates "); put_dec3(cnt);
+        if (off >= 0) { term_puts(", capacity words at EC "); put_hex2(off); bat_poll(100000); }
+        term_puts(off >= 0 ? "\n" : " (need exactly one; send me the ec dump)\n");
+    }
+    if (arg[0] == 's' && arg[1] == 'e' && arg[2] == 't') {
+        p = arg + 3;
+        int a = hex_tok(&p), b = hex_tok(&p), m = hex_tok(&p);
+        if (a < 0) { term_puts("usage: battery set PCT [AC [MASK]]   (EC offsets in hex, see ec)\n"); return; }
+        bat_config(a, b < 0 ? -1 : b, m < 0 ? 1 : m);
+        bat_poll(0);
+    }
+    int po, ao, am; bat_get_config(&po, &ao, &am);
+    { int c2; int ro = bat_autodetect_info(&c2); if (ro >= 0 && po < 0) { term_puts("battery: found automatically, capacity words at EC "); put_hex2(ro); term_puts("\n"); po = ro; } }
+    if (po < 0) { term_puts("battery: not set. Find the offset with ec snap / ec diff, then: battery set PCT [AC MASK]\n"); return; }
+    term_puts("battery: percent at EC "); put_hex2(po);
+    if (ao >= 0) { term_puts(", adapter at "); put_hex2(ao); term_puts(" mask "); put_hex2(am); }
+    term_puts("\n");
+    if (bat_percent() < 0) term_puts("reading: EC did not answer or the value is not 0..100\n");
+    else { term_puts("charge: "); put_dec3(bat_percent()); term_puts("%"); term_puts(bat_ac() == 1 ? ", adapter connected\n" : bat_ac() == 0 ? ", on battery\n" : "\n"); }
+}
+
+static void cmd_ecdiff(int snap)
+{
+    static u8 old[256], now[256]; static int have;
+    if (snap) { have = ec_dump(old) == 256; term_puts(have ? "EC snapshot saved. Change something (plug or unplug the charger), then: ec diff\n" : "EC: no answer\n"); return; }
+    if (!have) { term_puts("no snapshot: run ec snap first\n"); return; }
+    if (ec_dump(now) != 256) { term_puts("EC: no answer\n"); return; }
+    int n = 0;
+    for (int i = 0; i < 256; i++) {
+        if (now[i] == old[i]) continue;
+        put_hex2(i); term_puts(": "); put_hex2(old[i]); term_puts(" -> "); put_hex2(now[i]); term_puts("\n");
+        n++;
+    }
+    if (!n) term_puts("no changes\n");
+}
+
 static void cmd_ping(char *arg)
 {
     char *p = arg, *a = next_tok(&p);
@@ -717,7 +801,7 @@ static const cmd_info_t cmd_table[] = {
     { "free", "free" }, { "df", "df" }, { "ps", "ps" }, { "top", "top" }, { "kill", "kill name|pid" },
     { "whoami", "whoami" }, { "hostname", "hostname" }, { "sw_vers", "sw_vers" }, { "history", "history" },
     { "open", "open files|terminal|settings|snake|about|launchpad|mission" }, { "snake", "snake" },
-    { "disks", "disks  (SATA disks and their partitions, read only)" }, { "install", "install  (graphical installer: erases a disk!)" }, { "lock", "lock  (show the login screen)" }, { "lspci", "lspci  (list PCI devices: vendor:device class)" }, { "nicinfo", "nicinfo  (JMicron Ethernet diagnostics)" }, { "audio", "audio [test]  (HD Audio status; test plays the startup sound)" }, { "ifconfig", "ifconfig" }, { "ping", "ping [-c N] host  (Ctrl+C stops)" }, { "nslookup", "nslookup host" }, { "curl", "curl [-i] http://host/path  (Ctrl+C stops; no HTTPS yet)" },
+    { "usb", "usb [ls [path]]  (USB 2.0 flash drives: scan; ls lists a FAT32 stick)" }, { "disks", "disks  (SATA disks and their partitions, read only)" }, { "install", "install  (graphical installer: erases a disk!)" }, { "lock", "lock  (show the login screen)" }, { "lspci", "lspci  (list PCI devices: vendor:device class)" }, { "nicinfo", "nicinfo  (JMicron Ethernet diagnostics)" }, { "wifi", "wifi [on|fw|phy|stat|fwinstall]  (Realtek RTL8188CE Wi-Fi: detect, power on, firmware, radio tables)" }, { "ec", "ec [snap|diff]  (256 EC bytes; snap remembers them, diff shows what changed since)" }, { "battery", "battery [set PCT [AC MASK]|off]  (EC offsets in hex, e.g. battery set 7A 7B 01)" }, { "touchpad", "touchpad  (touchpad status and counters)" }, { "audio", "audio [test]  (HD Audio status; test plays the startup sound)" }, { "ifconfig", "ifconfig" }, { "ping", "ping [-c N] host  (Ctrl+C stops)" }, { "nslookup", "nslookup host" }, { "curl", "curl [-i] http://host/path  (Ctrl+C stops; no HTTPS yet)" },
     { "files", "files" }, { "wallpaper", "wallpaper N" }, { "theme", "theme light|dark" },
     { "accent", "accent purple|blue|green|..." }, { "dock", "dock hide off|auto|smart | zoom N | magnify on|off" },
     { "notify", "notify text" }, { "spotlight", "spotlight" }, { "cmatrix", "cmatrix (q to quit)" }, { "cowsay", "cowsay text" }, { "fortune", "fortune" },
@@ -790,9 +874,52 @@ static int term_ext_cmd(const char *cmd, char *arg)
     else if (s_eq(cmd, "open")) cmd_open(arg);
     else if (s_eq(cmd, "ifconfig")) cmd_ifconfig();
     else if (s_eq(cmd, "lspci")) cmd_lspci();
+    else if (s_eq(cmd, "wifi")) {
+        char wb[400];
+        if (!rtlwifi_present()) rtlwifi_probe();
+        if (s_eq(arg, "stat")) {                                   /* счётчики приёма: видно, слышит ли чип эфир */
+            u32 v[6]; rtlwifi_rxstat(v);
+            const char *nm[4] = { "frames received: ", "bad CRC: ", "broken: ", "frames sent: " };
+            for (int k = 0; k < 4; k++) { char t[16]; int l = 0; u32 x = v[k]; char r[12]; int rl = 0; do { r[rl++] = (char)('0' + x % 10); x /= 10; } while (x); while (rl) t[l++] = r[--rl]; t[l] = 0; term_puts(nm[k]); term_puts(t); term_puts("\n"); }
+            term_puts(rtlwifi_started() ? "radio: started\n" : "radio: NOT started (turn Wi-Fi on in Settings first)\n");
+            term_puts("networks: "); { char t[8]; int n = sta_net_count(); t[0] = (char)('0' + n / 10); t[1] = (char)('0' + n % 10); t[2] = 0; term_puts(t); } term_puts("\n");
+            term_puts("state: "); term_puts(sta_text()); term_puts("\n");
+        } else
+        if (arg[0] && s_eq(arg, "on")) {
+            int r = rtlwifi_poweron();
+            term_puts(r == 0 ? "wifi: chip powered on\n" : r == -2 ? "wifi: chip did not leave standby\n" : r == -3 ? "wifi: MAC blocks did not start\n" : "wifi: no adapter\n");
+        }
+        if (arg[0] && s_eq(arg, "fwinstall")) { const char *m = ""; res_install_fw(&m); term_puts("wifi: "); term_puts(m); term_puts("\n"); }
+        else if (arg[0] && (s_eq(arg, "fw") || s_eq(arg, "phy"))) {
+            if (!rtlwifi_have_blob()) term_puts("wifi: firmware file rtl8192cfw.bin was not passed by GRUB (see docs/NOTES.md)\n");
+            else {
+                int r = rtlwifi_poweron();
+                if (r == 0) r = rtlwifi_llt_init();
+                if (r == 0) r = rtlwifi_fw_start();
+                if (r == 0 && arg[0] == 'p') { r = rtlwifi_phy_config(); if (r == 0) term_puts("wifi: radio and baseband tables written\n"); }
+                term_puts(r == 0 ? "wifi: firmware is running\n" : r == -2 ? "wifi: bad firmware file\n" : r == -3 ? "wifi: buffer table (LLT) failed\n" : r == -4 ? "wifi: firmware checksum was not reported\n" : r == -5 ? "wifi: firmware loaded but did not start\n" : "wifi: chip is not ready (try `wifi on`)\n");
+            }
+        }
+        rtlwifi_diag(wb, (int)sizeof wb); term_puts(wb);
+    }
     else if (s_eq(cmd, "nicinfo")) { char nb[300]; jme_diag(nb, (int)sizeof nb); term_puts(nb); }
+    else if (s_eq(cmd, "battery")) cmd_battery(arg);
+    else if (s_eq(cmd, "ec")) {
+        static u8 ecd[256]; static const char hx[] = "0123456789ABCDEF";
+        if (s_eq(arg, "snap") || s_eq(arg, "diff")) { cmd_ecdiff(s_eq(arg, "snap")); return; }
+        int n = ec_dump(ecd);
+        if (n < 256) { { char nb[4] = { (char)('0' + n / 100), (char)('0' + n / 10 % 10), (char)('0' + n % 10), 0 }; term_puts("EC: no answer, bytes read: "); term_puts(nb); term_puts("\n"); } }
+        for (int r = 0; r < n / 16; r++) {
+            char ln[64]; int k = 0;
+            ln[k++] = hx[r]; ln[k++] = '0'; ln[k++] = ':';
+            for (int c = 0; c < 16; c++) { ln[k++] = ' '; ln[k++] = hx[ecd[r * 16 + c] >> 4]; ln[k++] = hx[ecd[r * 16 + c] & 15]; }
+            ln[k++] = '\n'; ln[k] = 0; term_puts(ln);
+        }
+    }
+    else if (s_eq(cmd, "touchpad")) { char tb[200]; ps2_tp_diag(tb, (int)sizeof tb); term_puts(tb); term_puts("\n"); }
     else if (s_eq(cmd, "audio")) { char ab[160]; hda_diag(ab, (int)sizeof ab); term_puts(ab[0] ? ab : "HD Audio: driver not linked\n"); if (s_eq(arg, "test")) hda_play_chime(); }
     else if (s_eq(cmd, "disks")) cmd_disks();
+    else if (s_eq(cmd, "usb")) cmd_usb(arg);
     else if (s_eq(cmd, "install")) { installer_open(); scene_dirty = 1; }
     else if (s_eq(cmd, "ping")) cmd_ping(arg);
     else if (s_eq(cmd, "nslookup")) cmd_nslookup(arg);

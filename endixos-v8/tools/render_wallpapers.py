@@ -337,10 +337,180 @@ def scene_night():
     Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8)).save(path, quality=86, optimize=True, progressive=False)
     print("Night", os.path.getsize(path) // 1024, "KB")
 
+# ---------- 2D-сцены в стиле macOS (рисуются сразу в цвете экрана) ----------
+def uv():
+    ys, xs = np.mgrid[0:RH, 0:RW].astype(np.float32)
+    return xs / RW, ys / RH
+
+def blur(c, r):
+    im = Image.fromarray((np.clip(c, 0, 1) * 255 + 0.5).astype(np.uint8)).filter(ImageFilter.GaussianBlur(r))
+    return np.asarray(im).astype(np.float32) / 255
+
+def vignette(c, k=0.22):
+    u, v = uv()
+    r = ((u - 0.5) * 1.6) ** 2 + ((v - 0.5) * 1.3) ** 2
+    return c * (1 - k * r)[..., None]
+
+def scene_aurora():
+    u, v = uv(); hz = 0.86
+    top, bot = col(3, 6, 22), col(14, 40, 70)
+    sky = mix(top, bot, smooth(0.0, 0.8, v) ** 1.3)
+    st = hash2(np.floor(u * RW / 1.6), np.floor(v * RH / 1.6), 5)
+    sky = sky + (st > 0.9965)[..., None] * (0.5 + 0.5 * hash2(np.floor(u * 90), np.floor(v * 60), 9))[..., None]
+    for k, (yc, w, c1, c2, sd) in enumerate([(0.30, 0.10, col(70, 255, 160), col(150, 90, 255), 3),
+                                              (0.40, 0.08, col(60, 230, 200), col(90, 140, 255), 8),
+                                              (0.24, 0.07, col(120, 255, 140), col(255, 90, 200), 13)]):
+        wob = 0.10 * np.sin(u * 5.0 + k * 2.0) + 0.12 * (fbm(u * 2.5 + k, np.full_like(u, k * 3.1), 3, sd) - 0.5)
+        d = (v - (yc + wob)) / w
+        band = np.exp(-np.where(d > 0, d * d * 0.7, d * d * 3.0))
+        streak = 0.35 + 0.9 * fbm(u * 55, v * 1.2 + k, 3, sd + 1)
+        inten = band * streak * (0.55 + 0.7 * fbm(u * 4 + k * 5, v * 2, 3, sd + 2))
+        tint = mix(c1, c2, smooth(-1.0, 1.4, -d))
+        sky = sky + tint * inten[..., None] * 0.95
+    ridge = 0.70 + 0.17 * (fbm(u * 2.2, np.zeros_like(u) + 1.5, 5, 21) - 0.5) * 2 + 0.05 * (fbm(u * 14, np.zeros_like(u), 3, 22) - 0.5)
+    sky = np.clip(sky, 0, 1.2)
+    out = sky.copy()
+    rows = np.arange(RH)
+    mrow = np.clip((2 * hz * RH - rows).astype(int), 0, RH - 1)
+    refl = blur(np.clip(sky[mrow], 0, 1), 3) * 0.55 + col(2, 8, 18) * 0.45
+    ripple = 0.04 * np.sin(v * 420 + u * 6) * smooth(hz, 1.0, v)
+    water = mix(refl, col(3, 10, 20), smooth(hz, 1.0, v) * 0.5) * (1 + ripple)[..., None]
+    out = np.where((v > hz)[..., None], water, out)
+    ground = (v > ridge) & (v <= hz + 0.002)
+    shade = mix(col(5, 9, 18), col(16, 30, 44), smooth(ridge, hz, v) * 0.6)
+    rim = np.exp(-np.abs(v - ridge) * 260)[..., None] * col(40, 90, 80) * 0.5
+    out = np.where(ground[..., None], shade + rim, out)
+    finish(vignette(np.clip(out, 0, 1), 0.3), "Aurora", 0.012, 31)
+
+def scene_liquid():
+    u, v = uv()
+    c = mix(col(10, 8, 40), col(52, 14, 96), smooth(0, 1, v * 0.8 + u * 0.4))
+    pal = [col(255, 64, 140), col(255, 150, 54), col(70, 120, 255), col(170, 84, 255), col(40, 220, 220)]
+    asp = RW / RH
+    for k in range(4):
+        wx = fbm(u * 1.1 + k * 3.1, v * 1.1 + k, 3, 40 + k)
+        f = np.sin((u * asp * (0.55 + 0.1 * k) + k * 1.3 + 1.7 * wx) * 2.0 + v * (1.6 - 0.2 * k)) * 0.5 + 0.5
+        h = smooth(0.42, 0.78, f) * (1 - smooth(0.86, 0.99, f))
+        h = blur(h, 1.5) if False else h
+        gy, gx = np.gradient(h)
+        nz = 1.0
+        n = np.stack([-gx * 9, -gy * 9, np.full_like(h, nz)], -1)
+        n /= np.linalg.norm(n, axis=-1, keepdims=True)
+        L = np.array([-0.4, -0.55, 0.73], np.float32); L /= np.linalg.norm(L)
+        dif = np.clip((n * L).sum(-1), 0, 1)
+        hl = np.clip((n * (L + np.array([0, 0, 1], np.float32)) / 1.6).sum(-1), 0, 1) ** 28
+        base = pal[k]
+        col_ = base * (0.22 + 0.62 * dif)[..., None] + hl[..., None] * 0.30
+        fresnel = (1 - n[..., 2]) ** 1.5
+        col_ = col_ + fresnel[..., None] * pal[(k + 2) % 5] * 0.45
+        a = (h * 0.92)[..., None]
+        c = c * (1 - a) + col_ * a
+    glow = blur(np.clip(c - 0.6, 0, 1), RW / 40)
+    c = c + glow * 0.5
+    finish(vignette(np.clip(c, 0, 1), 0.28), "Liquid", 0.010, 32)
+
+def scene_dawn():
+    u, v = uv()
+    sky = mix(col(104, 96, 190), col(250, 150, 170), smooth(0.0, 0.55, v))
+    sky = mix(sky, col(255, 205, 150), smooth(0.45, 0.78, v))
+    sx, sy = 0.66, 0.60
+    d = np.sqrt(((u - sx) * 1.6) ** 2 + (v - sy) ** 2)
+    sky = sky + col(255, 190, 110) * (np.exp(-d * 4.0) * 0.55 + np.exp(-d * 14.0) * 0.7)[..., None]
+    sky = sky + (smooth(0.045, 0.03, d))[..., None] * col(255, 245, 220)
+    cl = fbm(u * 3.0, v * 14.0, 4, 50)
+    cmask = smooth(0.52, 0.8, cl) * smooth(0.05, 0.4, v) * (1 - smooth(0.4, 0.62, v))
+    sky = mix(sky, col(255, 200, 190) + col(0, 20, 40) * v[..., None], cmask * 0.55)
+    out = sky
+    layers = [(0.62, 0.05, col(150, 120, 190), 61), (0.68, 0.06, col(120, 92, 168), 62), (0.75, 0.07, col(88, 66, 140), 63),
+              (0.83, 0.08, col(58, 42, 104), 64), (0.92, 0.07, col(32, 24, 70), 65)]
+    for i, (base, amp, c_, sd) in enumerate(layers):
+        r = base + amp * (fbm(u * (2.0 + i * 0.8), np.zeros_like(u) + i, 5, sd) - 0.5) * 2
+        m = (v > r)[..., None]
+        haze = smooth(r, r + 0.18, v) ** 0.8
+        lay = mix(c_, mix(c_, col(255, 190, 170), 0.5), (1 - haze) * (0.75 - i * 0.12))
+        glow = np.exp(-np.abs(v - r) * 120)[..., None] * col(255, 190, 150) * (0.35 - i * 0.05)
+        out = np.where(m, lay + glow, out)
+    finish(vignette(np.clip(out, 0, 1), 0.22), "Dawn", 0.012, 33)
+
+# ---------- «живые» обои день/ночь в духе macOS (пара сцен: "<Имя> Day" и "<Имя> Night") ----------
+def sheet(out, a, b, edge, c_edge, c_deep, span=0.5, shadow=0.35, rim=0.22, rimc=None):
+    d = b - edge
+    out = out * (1 - shadow * np.exp(-np.maximum(-d, 0) * 10) * (d <= 0))[..., None]
+    t = smooth(0.0, span, d)
+    body = mix(c_edge, c_deep, t)
+    body = body + (rimc if rimc is not None else c_edge) * (np.exp(-np.maximum(d, 0) * 40) * rim)[..., None]
+    return np.where((d > 0)[..., None], body, out)
+
+def rot(u, v, deg, ox, oy):
+    asp = RW / RH
+    th = np.deg2rad(deg); x, y = (u - ox) * asp, v - oy
+    return x * np.cos(th) + y * np.sin(th), -x * np.sin(th) + y * np.cos(th)
+
+def petals(night):
+    u, v = uv(); asp = RW / RH
+    dx, dy = u * asp + 0.25 * asp, 1.2 - v
+    r, phi = np.hypot(dx, dy), np.arctan2(dy, dx)
+    if not night:
+        out = mix(col(92, 168, 236), col(140, 200, 248), smooth(0, 1, v))
+        P = [(1.12, 0.34, 0.3, col(255, 196, 96), col(240, 120, 44)), (0.98, 0.48, 1.4, col(255, 222, 120), col(250, 150, 50)),
+             (0.70, 0.44, 2.6, col(255, 206, 100), col(236, 112, 40)), (0.46, 0.38, 3.9, col(252, 184, 84), col(214, 86, 36)),
+             (0.24, 0.30, 5.0, col(255, 170, 70), col(200, 72, 40))]
+    else:
+        out = mix(col(4, 12, 36), col(10, 24, 58), smooth(0, 1, v))
+        P = [(1.12, 0.34, 0.3, col(150, 50, 80), col(36, 20, 80)), (0.98, 0.48, 1.4, col(240, 120, 50), col(120, 34, 66)),
+             (0.70, 0.44, 2.6, col(226, 96, 44), col(100, 28, 70)), (0.46, 0.38, 3.9, col(190, 64, 56), col(70, 24, 84)),
+             (0.24, 0.30, 5.0, col(150, 50, 80), col(44, 20, 90))]
+    for (c0, hw0, ph, ce, cd) in P:
+        c = c0 + 0.09 * np.sin(r * 3.2 + ph) + 0.03 * np.sin(r * 8.0 + ph * 2)
+        hw = hw0 * (0.35 + 0.9 * smooth(0.1, 1.5, r))
+        p1, p2 = c - hw, c + hw
+        t = (phi - p1) / (p2 - p1)
+        out = out * (1 - 0.40 * np.exp(-np.maximum(p1 - phi, 0) * r * 9) * (t <= 0))[..., None]
+        body = mix(ce, cd, np.clip(t, 0, 1) ** 1.3)
+        body = body + ce * (np.exp(-np.clip(t, 0, 9) * 14) * 0.28)[..., None]
+        out = np.where(((t > 0) & (t < 1))[..., None], body, out)
+    g = blur(np.clip(out - 0.62, 0, 1), RW / 60)
+    out = out + g * (0.45 if not night else 0.9)
+    finish(vignette(np.clip(out, 0, 1), 0.18), "Petals" + (" Night" if night else " Day"), 0.010, 41 + night)
+
+def layers(night):
+    u, v = uv()
+    if not night:
+        sky = mix(col(250, 196, 150), col(120, 160, 225), smooth(0.55, 0.0, v))
+        L = [(0.40, 0.10, 0.5, col(244, 150, 120), col(220, 110, 130)),
+             (0.50, 0.12, 0.8, col(120, 200, 215), col(70, 150, 200)),
+             (0.62, 0.13, 1.1, col(110, 130, 220), col(80, 80, 190)),
+             (0.74, 0.12, 1.4, col(235, 110, 80), col(200, 60, 90)),
+             (0.86, 0.10, 1.8, col(190, 110, 240), col(120, 70, 200))]
+    else:
+        sky = mix(col(30, 34, 80), col(8, 10, 34), smooth(0.7, 0.0, v))
+        L = [(0.40, 0.10, 0.5, col(60, 62, 120), col(34, 36, 90)),
+             (0.50, 0.12, 0.8, col(40, 120, 150), col(30, 80, 130)),
+             (0.62, 0.13, 1.1, col(70, 80, 170), col(44, 44, 130)),
+             (0.74, 0.12, 1.4, col(190, 60, 62), col(120, 34, 70)),
+             (0.86, 0.10, 1.8, col(150, 80, 210), col(86, 44, 150))]
+    out = sky
+    for i, (base, amp, fq, ce, cd) in enumerate(L):
+        edge = base + amp * 0.5 * np.sin(u * fq * 3.2 + i * 1.7 + 0.5) + amp * 0.18 * np.sin(u * fq * 7.0 + i * 2.9) - amp * 0.35 * smooth(0.0, 1.0, u) * (i % 2)
+        out = sheet(out, u, v, edge, ce, cd, span=0.35, shadow=0.38, rim=0.30)
+    g = blur(np.clip(out - 0.7, 0, 1), RW / 70)
+    out = out + g * 0.5
+    finish(vignette(np.clip(out, 0, 1), 0.16), "Layers" + (" Night" if night else " Day"), 0.010, 51 + night)
+
+def scene_petals_day(): petals(0)
+def scene_petals_night(): petals(1)
+def scene_layers_day(): layers(0)
+def scene_layers_night(): layers(1)
+
 SCENES = [("Sahara", scene_sahara), ("Sunset", scene_ocean), ("Forest", scene_forest),
-          ("Ridges", scene_ridges), ("Night", scene_night)]
+          ("Ridges", scene_ridges), ("Night", scene_night),
+          ("Aurora", scene_aurora), ("Liquid", scene_liquid), ("Dawn", scene_dawn),
+          ("Petals Day", scene_petals_day), ("Petals Night", scene_petals_night),
+          ("Layers Day", scene_layers_day), ("Layers Night", scene_layers_night)]
 TITLES = {"Sahara": "Sahara Dusk", "Sunset": "Ocean Sunset", "Forest": "Misty Forest 3D",
-          "Ridges": "Blue Ridge", "Night": "Desert Night"}
+          "Ridges": "Blue Ridge", "Night": "Desert Night",
+          "Aurora": "Northern Lights", "Liquid": "Liquid Glass", "Dawn": "Violet Dawn",
+          "Petals Day": "Petals Day", "Petals Night": "Petals Night", "Layers Day": "Layers Day", "Layers Night": "Layers Night"}
 
 def pack():
     names = [n for n, _ in SCENES]

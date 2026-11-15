@@ -67,7 +67,7 @@ static int mouse_cmd(u8 c)
 /* ---------- мышь ---------- */
 
 static i32 mx, my, bound_w = 1024, bound_h = 768;
-static u8  pkt[4];
+static u8  pkt[6];
 static int pkt_len, pkt_size = 3;     /* 4 байта, если мышь с колесом (IntelliMouse) */
 
 void ps2_set_bounds(u32 width, u32 height)
@@ -78,8 +78,123 @@ void ps2_set_bounds(u32 width, u32 height)
     my = bound_h / 2;
 }
 
+/* ---------- тачпад Synaptics (абсолютный режим, 6-байтовые пакеты) ---------- */
+
+static int tp_on, tp_speed = 50, tp_tap = 1, tp_nat = 1;
+static u32 tp_pkts, tp_taps, tp_rtaps, tp_scrolls;
+static u8  tp_id[3];
+static struct { int down, lx, ly, dur, travel, maxf, lastf, sacc, rx, ry, btn; } tp;
+
+void ps2_tp_set(int speed, int tap, int natural) { tp_speed = speed < 0 ? 0 : speed > 100 ? 100 : speed; tp_tap = tap ? 1 : 0; tp_nat = natural ? 1 : 0; }
+void ps2_tp_get(int *speed, int *tap, int *natural) { *speed = tp_speed; *tap = tp_tap; *natural = tp_nat; }
+int  ps2_tp_present(void) { return tp_on; }
+
+static void tp_buttons(int btn)
+{
+    if (btn == tp.btn) return;
+    tp.btn = btn;
+    event_push(EV_MOUSE, mx, my, btn);
+}
+
+static i32 iabs(i32 v) { return v < 0 ? -v : v; }
+
+static void tp_move(i32 dx, i32 dy)
+{
+    i32 mag = iabs(dx) + iabs(dy);
+    i32 g = 6 + tp_speed * 24 / 100;                      /* пикселей на 64 единицы тачпада */
+    if (mag > 200) g *= 2; else if (mag > 80) g = g * 3 / 2;
+    tp.rx += dx * g; tp.ry += dy * g;
+    i32 px = tp.rx / 64, py = tp.ry / 64;
+    tp.rx -= px * 64; tp.ry -= py * 64;
+    if (!px && !py) return;
+    mx += px; my -= py;                                   /* Y тачпада растёт вверх */
+    if (mx < 0) mx = 0;
+    if (my < 0) my = 0;
+    if (mx > bound_w - 1) mx = bound_w - 1;
+    if (my > bound_h - 1) my = bound_h - 1;
+    event_push(EV_MOUSE, mx, my, tp.btn);
+}
+
+void tp_packet(const u8 *b)
+{
+    tp_pkts++;
+    i32 x = (i32)(((b[3] & 0x10) << 8) | ((b[1] & 0x0F) << 8) | b[4]);
+    i32 y = (i32)(((b[3] & 0x20) << 7) | ((b[1] & 0xF0) << 4) | b[5]);
+    i32 z = b[2];
+    i32 w = ((b[0] & 0x30) >> 2) | ((b[0] & 0x04) >> 1) | ((b[3] & 0x04) >> 2);
+    int left = (b[0] & 1) | ((b[0] ^ b[3]) & 1), right = (b[0] >> 1) & 1;   /* у клик-падов кнопка видна как разница */
+    int present = z > 25;
+    int fingers = (w == 0 || w == 1) ? 2 : 1;
+    tp_buttons(left | right << 1);
+    if (!present) {
+        if (tp.down) {                                    /* палец поднят: может это был тап */
+            if (tp_tap && tp.dur <= 25 && tp.travel < 150 && tp.maxf == 1) { tp_taps++; event_push(EV_MOUSE, mx, my, 1); event_push(EV_MOUSE, mx, my, tp.btn); }
+            else if (tp_tap && tp.dur <= 30 && tp.travel < 200 && tp.maxf == 2) { tp_rtaps++; event_push(EV_MOUSE, mx, my, 2); event_push(EV_MOUSE, mx, my, tp.btn); }
+        }
+        tp.down = 0; tp.sacc = 0; tp.rx = tp.ry = 0;
+        return;
+    }
+    if (!tp.down) { tp.down = 1; tp.lx = x; tp.ly = y; tp.dur = 0; tp.travel = 0; tp.maxf = fingers; tp.lastf = fingers; tp.sacc = 0; return; }
+    tp.dur++;
+    if (fingers > tp.maxf) tp.maxf = fingers;
+    if (fingers != tp.lastf) { tp.lastf = fingers; tp.lx = x; tp.ly = y; return; }   /* число пальцев сменилось: координата скачет */
+    i32 dx = x - tp.lx, dy = y - tp.ly;
+    tp.lx = x; tp.ly = y;
+    tp.travel += iabs(dx) + iabs(dy);
+    if (fingers == 1) { tp_move(dx, dy); return; }
+    tp.sacc += tp_nat ? -dy : dy;                         /* палец вверх (dy > 0): классика - вверх, естественная - вниз */
+    while (tp.sacc >= 90) { tp.sacc -= 90; tp_scrolls++; event_push(EV_WHEEL, 1, 0, 0); }
+    while (tp.sacc <= -90) { tp.sacc += 90; tp_scrolls++; event_push(EV_WHEEL, -1, 0, 0); }
+}
+
+void ps2_tp_diag(char *out, int cap)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    int n = 0;
+    const char *h = tp_on ? "Synaptics touchpad, id " : "No Synaptics touchpad (standard PS/2 mouse)";
+    while (*h && n < cap - 40) out[n++] = *h++;
+    if (tp_on) {
+        for (int i = 0; i < 3; i++) { out[n++] = hex[tp_id[i] >> 4]; out[n++] = hex[tp_id[i] & 15]; if (i < 2) out[n++] = '.'; }
+        const char *k[4] = { ", packets ", ", taps ", ", right taps ", ", scroll steps " };
+        u32 v[4] = { tp_pkts, tp_taps, tp_rtaps, tp_scrolls };
+        for (int i = 0; i < 4; i++) {
+            const char *p = k[i]; while (*p && n < cap - 14) out[n++] = *p++;
+            char t[11]; int m = 0; u32 q = v[i]; if (!q) t[m++] = '0';
+            while (q) { t[m++] = (char)('0' + q % 10); q /= 10; }
+            while (m && n < cap - 2) out[n++] = t[--m];
+        }
+    }
+    out[n] = 0;
+}
+
+static int syn_send(u8 arg)                              /* команда Synaptics: 4 пары (E8, 2 бита) */
+{
+    for (int i = 6; i >= 0; i -= 2)
+        if (mouse_cmd(0xE8) != 0xFA || mouse_cmd((u8)((arg >> i) & 3)) != 0xFA) return 0;
+    return 1;
+}
+
+static int syn_detect(void)
+{
+    if (!syn_send(0x00) || mouse_cmd(0xE9) != 0xFA) return 0;
+    int a = dev_read(), b = dev_read(), c = dev_read();
+    if (a < 0 || b != 0x47) { flush(); return 0; }
+    tp_id[0] = (u8)a; tp_id[1] = (u8)b; tp_id[2] = (u8)c;
+    if (!syn_send(0xC5) || mouse_cmd(0xF3) != 0xFA || mouse_cmd(0x14) != 0xFA) return 0;   /* абсолютный режим, W, высокая частота, без жестов самого тачпада */
+    return 1;
+}
+
 static void mouse_byte(u8 b)
 {
+    if (tp_on) {
+        if (pkt_len == 0 && (b & 0xC8) != 0x80) return;
+        pkt[pkt_len++] = b;
+        if (pkt_len == 4 && (pkt[3] & 0xC8) != 0xC0) { pkt_len = 0; return; }
+        if (pkt_len < 6) return;
+        pkt_len = 0;
+        tp_packet(pkt);
+        return;
+    }
     if (pkt_len == 0 && !(b & 0x08))
         return;                           /* потеряна синхронизация: первый байт всегда с битом 3 */
     pkt[pkt_len++] = b;
@@ -233,11 +348,15 @@ void ps2_init(void)
     int ack_kbd = dev_read();
 
     int ack_def   = mouse_cmd(0xF6);      /* мышь: настройки по умолчанию */
-    /* колесо: магическая последовательность частот 200,100,80, затем запрос ID (3 - есть колесо) */
-    mouse_cmd(0xF3); mouse_cmd(200);
-    mouse_cmd(0xF3); mouse_cmd(100);
-    mouse_cmd(0xF3); mouse_cmd(80);
-    if (mouse_cmd(0xF2) == 0xFA && dev_read() == 3) pkt_size = 4;
+    if (syn_detect()) { tp_on = 1; pkt_size = 6; }
+    else {
+        mouse_cmd(0xF6);                  /* после неудачной пробы вернуть настройки по умолчанию */
+        /* колесо: магическая последовательность частот 200,100,80, затем запрос ID (3 - есть колесо) */
+        mouse_cmd(0xF3); mouse_cmd(200);
+        mouse_cmd(0xF3); mouse_cmd(100);
+        mouse_cmd(0xF3); mouse_cmd(80);
+        if (mouse_cmd(0xF2) == 0xFA && dev_read() == 3) pkt_size = 4;
+    }
     int ack_start = mouse_cmd(0xF4);      /* мышь: начать передачу данных */
     serial_puts("PS/2: ack kbd=");
     serial_put_hex((u32)ack_kbd);

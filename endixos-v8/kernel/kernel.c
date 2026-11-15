@@ -5,14 +5,19 @@
 #include "../drivers/hda.h"
 #include "../gui/control.h"
 #include "../gui/photos.h"
+#include "../gui/splash.h"
 #include "../gui/resolution.h"
 #include "../gui/update.h"
+#include "../gui/wifi.h"
+#include "../gui/perf.h"
 #include "net.h"
 #include "crypto.h"
 #include "../gui/prefs.h"
 #include "types.h"
 #include "multiboot.h"
+#include "../drivers/rtlwifi.h"
 #include "io.h"
+#include "acpi.h"
 #include "gdt.h"
 #include "idt.h"
 #include "cpu.h"
@@ -47,6 +52,7 @@ void sys_reboot(void)
 void sys_shutdown(void)
 {
     __asm__ volatile("cli");
+    acpi_poweroff();                                   /* настоящее железо */
     outw(0x604, 0x2000);
     outw(0xB004, 0x2000);
     outw(0x4004, 0x3400);
@@ -104,6 +110,7 @@ void kernel_main(u32 magic, multiboot_info_t *mbi)
         halt_forever();
     }
 
+    splash_draw(5);
     if ((mbi->flags & 4u) && mbi->cmdline) {               /* параметр "wide": нетбук 1024x600 в режиме 800x600 */
         const char *c = (const char *)mbi->cmdline;
         for (; *c; c++)
@@ -115,6 +122,12 @@ void kernel_main(u32 magic, multiboot_info_t *mbi)
     if ((mbi->flags & 8u) && mbi->mods_count > 0) {
         const u32 *m = (const u32 *)mbi->mods_addr;
         if (m[1] > m[0]) { kimg = (const u8 *)m[0]; kimg_len = m[1] - m[0]; }
+        for (u32 i = 1; i < mbi->mods_count; i++) {                    /* дополнительные модули: прошивка Wi-Fi */
+            const u32 *q = m + i * 4; const char *nm = (const char *)q[2];
+            const char *want = "rtl8192cfw.bin"; int eq = nm != 0;
+            for (int j = 0; eq && want[j]; j++) if (nm[j] != want[j]) eq = 0;
+            if (eq && q[1] > q[0]) rtlwifi_set_blob((const u8 *)q[0], q[1] - q[0]);
+        }
     }
     gdt_init();
     idt_init();
@@ -127,7 +140,9 @@ void kernel_main(u32 magic, multiboot_info_t *mbi)
     info.width  = fb_width();
     info.height = fb_height();
 
+    splash_draw(25);
     wm_init(&info);
+    splash_draw(40);
     update_time();
     int inst = 0;                                          /* "installed": запуск с диска, поставленного установщиком; здесь нужен вход */
     if ((mbi->flags & 4u) && mbi->cmdline)
@@ -141,9 +156,11 @@ void kernel_main(u32 magic, multiboot_info_t *mbi)
         serial_puts("login: user found on disk\n");
     } else if (inst) serial_puts("login: users.dat not found, starting without login\n");
     else wm_live_hint();                                   /* запуск с флешки: подсказка, где установщик */
+    splash_draw(55);
     photos_scan();                                         /* фотографии для обоев с диска: /Pictures */
-    if (ata_init()) prefs_init(ata_read, ata_write);      /* сохранённые настройки с виртуального диска */
+    ata_init(); prefs_init(ata_read, ata_write);      /* сохранённые настройки с виртуального диска */
 
+    splash_draw(70);
     if (e1000_init()) { u8 mac[6]; e1000_mac(mac); net_init(mac, e1000_send); wm_set_net_stats(net_stats_cb); serial_puts("e1000: found, link "); serial_puts(e1000_link() ? "up\n" : "DOWN\n"); }
     else if (jme_init()) { u8 mac[6]; nic_jme = 1; jme_mac(mac); net_init(mac, jme_send); wm_set_net_stats(net_stats_cb); serial_puts("jme: found (JMicron Ethernet)\n"); }
     else serial_puts("e1000: not found on PCI\n");   /* сеть: DHCP стартует сам */
@@ -154,12 +171,23 @@ void kernel_main(u32 magic, multiboot_info_t *mbi)
     int audio = hda_init();
     serial_puts(audio ? "hda: audio output ready\n" : "hda: no HD Audio output found\n");
 
-    wm_render();
-    fb_flip();
+    splash_draw(85);
     serial_puts("Desktop up, entering main loop\n");
 
     __asm__ volatile("sti");
+    {   /* доводим полосу до конца (около 0,7 с), потом рабочий стол проявляется из чёрного */
+        u32 t0 = pit_ticks();
+        int lastpc = 85;
+        while ((i32)(pit_ticks() - t0) < 70) { int pc = 85 + (int)(pit_ticks() - t0) * 15 / 70; if (pc != lastpc) { lastpc = pc; splash_draw(pc); } }
+        for (int a = 255; a >= 0; a -= 64) { wm_render(); fb_blend_rect(0, 0, (i32)fb_width(), (i32)fb_height(), RGB(0, 0, 0), (u32)a); fb_flip(); }
+        wm_render(); fb_flip();
+    }
 
+    {   /* сколько тактов в тике PIT: нужно, чтобы замерять время кадра на любом процессоре */
+        u32 t0 = pit_ticks(); while (pit_ticks() == t0) { }
+        u32 c0 = rdtsc_lo(); t0 = pit_ticks(); while ((i32)(pit_ticks() - t0) < 5) { }
+        perf_init((rdtsc_lo() - c0) / 5);
+    }
     u32 next_second = pit_ticks() + PIT_HZ;
     int last_vol = -1;
     if (audio) hda_play_chime();                                   /* звук запуска */
@@ -193,6 +221,7 @@ void kernel_main(u32 magic, multiboot_info_t *mbi)
         }
         e1000_poll(net_rx);
         jme_poll(net_rx);
+        wifi_tick(now);
         rng_mix(rdtsc_lo());
         net_tick(now);
         prefs_tick(now);
@@ -202,8 +231,11 @@ void kernel_main(u32 magic, multiboot_info_t *mbi)
 
         if (dirty)
             wm_invalidate();
-        if (wm_frame(now))
+        u32 f0 = rdtsc_lo();
+        if (wm_frame(now)) {
+            if (wm_last_was_scene()) perf_frame(rdtsc_lo() - f0);
             continue;
+        }
 
         /* Спим до следующего прерывания; cli/проверка/sti;hlt исключает потерю пробуждения. */
         __asm__ volatile("cli");

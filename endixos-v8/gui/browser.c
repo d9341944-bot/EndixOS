@@ -1,5 +1,6 @@
 /* Браузер EndixOS: окно с адресной строкой и страницей. Страница грузится из сети (kernel/net.c)
  * или берётся из встроенных адресов endix://. Всё движется плавно: прогресс, прокрутка, полоса, подсказка ссылки. */
+#include "settings.h"
 #include "browser.h"
 #include "html.h"
 #include "fb.h"
@@ -50,7 +51,7 @@ static u32 page_len; static int page_plain, src_view;      /* исходник �
 
 static const char HOME_HTML[] =
     "<title>Start Page</title>"
-    "<center><h1>EndixOS Browser</h1>"
+    "<center><h1>Browix</h1>"
     "<p>A browser written from scratch: its own network stack, HTML parser and page layout.</p></center>"
     "<hr><h2>Try these</h2>"
     "<ul>"
@@ -68,9 +69,9 @@ static const char HOME_HTML[] =
     "Pages are shown without CSS, scripts and images, so heavy modern sites may look plain or incomplete.</p>";
 
 static const char ABOUT_HTML[] =
-    "<title>About EndixOS Browser</title>"
+    "<title>About Browix</title>"
     "<h1>About</h1>"
-    "<p>This browser is part of EndixOS 8.0. Everything underneath is written from scratch:</p>"
+    "<p>This browser is part of EndixOS " ENDIX_VERSION ". Everything underneath is written from scratch:</p>"
     "<ul><li>Intel e1000 network card driver</li><li>Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS</li>"
     "<li>TCP client, HTTP/1.0 with redirects and chunked transfer, TLS 1.2 (X25519, AES-GCM)</li><li>HTML tokenizer and page layout</li></ul>"
     "<h2>Supported</h2>"
@@ -115,6 +116,19 @@ static void show_error(const char *head, const char *msg, const char *retry_url)
     u32 n = 0;
     n = eapp(n, "<title>", 0); n = eapp(n, head, 1); n = eapp(n, "</title><h1>", 0); n = eapp(n, head, 1);
     n = eapp(n, "</h1><p>", 0); n = eapp(n, msg, 1); n = eapp(n, "</p>", 0);
+    if (head[0] == 'C') {                                  /* строка про сеть: сразу видно, есть ли адрес и DNS */
+        net_info_t ni; char ip[20];
+        net_info(&ni);
+        n = eapp(n, "<p>Network: ", 0);
+        if (!ni.present) n = eapp(n, "no network adapter is active.", 0);
+        else if (!ni.up) n = eapp(n, "no IP address yet (cable or Wi-Fi is not connected, or DHCP is still running).", 0);
+        else {
+            n = eapp(n, "address ", 0); net_ip_fmt(ni.ip, ip); n = eapp(n, ip, 1);
+            n = eapp(n, ", gateway ", 0); net_ip_fmt(ni.gw, ip); n = eapp(n, ip, 1);
+            n = eapp(n, ", DNS ", 0); net_ip_fmt(ni.dns, ip); n = eapp(n, ip, 1);
+        }
+        n = eapp(n, "</p>", 0);
+    }
     if (retry_url && retry_url[0]) {
         n = eapp(n, "<p><a href=\"", 0); n = eapp(n, retry_url, 1); n = eapp(n, "\">Try again</a></p>", 0);
     }

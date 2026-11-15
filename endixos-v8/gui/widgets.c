@@ -1,4 +1,5 @@
 /* Виджеты рабочего стола в стиле macOS. Часы рисуются со сглаживанием: линия - расстояние до отрезка. */
+#include "settings.h"
 #include "widgets.h"
 #include "fb.h"
 #include "font.h"
@@ -290,7 +291,7 @@ static void system_widget(i32 x, i32 y)
     u32 tx, sb;
     card(x, y, WW, 116, &tx, &sb);
     logo_draw(x + 14, y + 12, 18, theme_accent());
-    font_draw(x + 38, y + 12, "EndixOS 8.0", tx, FONT_BOLD);
+    font_draw(x + 38, y + 12, "EndixOS " ENDIX_VERSION, tx, FONT_BOLD);
     char buf[64], *p;
     i32 ry = y + 42;
     font_draw(x + 14, ry, "CPU", sb, FONT_REGULAR);

@@ -1,5 +1,5 @@
-build=35
+build=36
 version=8.2
-size=3302588
-notes=Browix: новый значок, значки
-sha256=82e38bd9412f68ae0db1cde79705051c11c64b0c18411681fbc837d2b2142aad
+size=3311816
+notes=Настройка даты и времени, синхронизация по интернету
+sha256=0bef090fcbe0cf9762cdfcc64b8ebfd0c4af79b66c6d43a34d912a831f6e6207

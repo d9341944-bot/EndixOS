@@ -10,6 +10,7 @@
 
 int  photos_scan(void);                                  /* ищет фотографии на дисках; число найденных */
 int  photos_scan_volume(blk_t *b, u32 start);            /* то же для уже известного раздела (для тестов) */
+int  photos_volume(fat_t *f);                            /* монтирует FAT32-раздел диска (его же использует Music); 1 - успех */
 int  photos_count(void);
 const char *photos_name(int k);                          /* имя файла без расширения */
 int  photos_paint(int k, u32 *dst, u32 w, u32 h);        /* картинка на весь dst (заполнение с обрезкой по центру); 1 - успех */

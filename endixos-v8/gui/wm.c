@@ -2,9 +2,27 @@
 #include "wm.h"
 #include "../drivers/pci.h"
 #include "../drivers/ahci.h"
+#include "../drivers/usb.h"
+__attribute__((weak)) int usb_scan(void) { return 0; }                 /* заглушки для хост-тестов; в ядре их заменяет drivers/usb.c */
+__attribute__((weak)) int usb_drive_count(void) { return 0; }
+__attribute__((weak)) blk_t *usb_blk(int i) { (void)i; return 0; }
+__attribute__((weak)) const char *usb_log(void) { return ""; }
 __attribute__((weak)) int ahci_init(void) { return 0; }
+__attribute__((weak)) void ps2_tp_diag(char *o, int c) { (void)c; o[0] = 0; }
 __attribute__((weak)) void hda_diag(char *out, int cap) { (void)cap; out[0] = 0; }
 __attribute__((weak)) void hda_play_chime(void) {}
+__attribute__((weak)) int  rtlwifi_probe(void) { return 0; }
+__attribute__((weak)) int  rtlwifi_present(void) { return 0; }
+__attribute__((weak)) int  rtlwifi_poweron(void) { return -1; }
+__attribute__((weak)) void rtlwifi_diag(char *b, int n) { (void)n; b[0] = 0; }
+__attribute__((weak)) int  rtlwifi_have_blob(void) { return 0; }
+__attribute__((weak)) void rtlwifi_rxstat(u32 *v) { for (int i = 0; i < 6; i++) v[i] = 0; }
+__attribute__((weak)) int  rtlwifi_started(void) { return 0; }
+__attribute__((weak)) int  sta_net_count(void) { return 0; }
+__attribute__((weak)) const char *sta_text(void) { return ""; }
+__attribute__((weak)) int  rtlwifi_llt_init(void) { return -1; }
+__attribute__((weak)) int  rtlwifi_fw_start(void) { return -1; }
+__attribute__((weak)) int  rtlwifi_phy_config(void) { return -1; }
 __attribute__((weak)) void jme_diag(char *out, int cap) { (void)cap; out[0] = 0; }
 __attribute__((weak)) const char *ahci_status(void) { return "n/a"; }
 __attribute__((weak)) const ahci_disk_t *ahci_disk(int i) { (void)i; return 0; }
@@ -22,6 +40,17 @@ __attribute__((weak)) u32 pci_read32(u32 bus, u32 dev, u32 fn, u32 off) { (void)
 #include "settings.h"
 #include "wallpaper.h"
 #include "snake.h"
+#include "calc.h"
+#include "notes.h"
+#include "viewer.h"
+#include "clockapp.h"
+#include "calapp.h"
+#include "music.h"
+#include "battery.h"
+#include "scenery.h"
+#include "timeset.h"
+#include "../kernel/ec.h"
+#include "../drivers/ps2.h"
 #include "browser.h"
 #include "files.h"
 #include "desktop.h"
@@ -32,13 +61,16 @@ __attribute__((weak)) u32 pci_read32(u32 bus, u32 dev, u32 fn, u32 off) { (void)
 #include "installer.h"
 #include "../drivers/jme.h"
 #include "../drivers/hda.h"
+#include "../drivers/rtlwifi.h"
+#include "../kernel/sta.h"
+#include "resolution.h"
 #include "login.h"
 
 #define MENUBAR_H 24
 #define TITLE_H   28
 #define WIN_R     14
 
-enum { APP_FILES, APP_TERMINAL, APP_SETTINGS, APP_SNAKE, APP_ABOUT, APP_BROWSER, APP_COUNT };
+enum { APP_FILES, APP_TERMINAL, APP_SETTINGS, APP_SNAKE, APP_ABOUT, APP_BROWSER, APP_CALC, APP_NOTES, APP_CLOCK, APP_CAL, APP_MUSIC, APP_COUNT, APP_TEXTEDIT = APP_COUNT, APP_PREVIEW, WIN_COUNT };   /* до APP_COUNT - приложения Dock; TextEdit и Preview открываются из Files */
 
 typedef struct {
     int open;
@@ -48,15 +80,18 @@ typedef struct {
     i32 sx, sy, sw, sh;          /* позиция и размер до разворачивания */
 } window_t;
 
-static const char *const app_name[APP_COUNT]  = { "Files", "Terminal", "Settings", "Snake", "About", "Browser" };
-static const char *const app_title[APP_COUNT] = { "Files", "Terminal", "Settings", "Snake", "", "Browser" };
-static const i32 app_w[APP_COUNT] = { FILES_W, 580, 640, 380, 280, BROWSER_W };
-static const u8  app_resizable[APP_COUNT] = { 1, 1, 1, 0, 0, 1 };
-static const i32 app_minw[APP_COUNT] = { 560, 320, 640, 0, 0, 420 };
-static const i32 app_minh[APP_COUNT] = { 260 + TITLE_H, 150 + TITLE_H, 520, 0, 0, 260 + TITLE_H };
-static const i32 app_h[APP_COUNT] = { FILES_H + TITLE_H, 360, 520, 400, 520, BROWSER_H };
+static const char *const app_name[WIN_COUNT]  = { "Files", "Terminal", "Settings", "Snake", "About", "Browix", "Calculator", "Notes", "Clock", "Calendar", "Music", "TextEdit", "Preview" };
+static const char *const app_title[WIN_COUNT] = { "Files", "Terminal", "Settings", "Snake", "", "Browix", "Calculator", "Notes", "Clock", "Calendar", "Music", "", "" };
+static const i32 app_w[WIN_COUNT] = { FILES_W, 580, 640, 380, 280, BROWSER_W, CALC_W, 560, CLK_W, CAL_W, MUS_W, 560, 640 };
+static const u8  app_resizable[WIN_COUNT] = { 1, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1 };
+static const i32 app_minw[WIN_COUNT] = { 560, 320, 640, 0, 0, 420, 0, 320, 0, 0, 0, 320, 320 };
+static const i32 app_minh[WIN_COUNT] = { 260 + TITLE_H, 150 + TITLE_H, 520, 0, 0, 260 + TITLE_H, 0, 200 + TITLE_H, 0, 0, 0, 200 + TITLE_H, 200 + TITLE_H };
+static const i32 app_h[WIN_COUNT] = { FILES_H + TITLE_H, 360, 520, 400, 520, BROWSER_H, CALC_H + TITLE_H, 420, CLK_H + TITLE_H, CAL_H + TITLE_H, MUS_H + TITLE_H, 440, 500 };
 
 static void open_window(int app);
+void wm_open_file(int node);
+static int app_icon(int a) { return a < 6 ? a : a == APP_COUNT ? ICON_LAUNCHPAD : a == APP_CALC ? ICON_APP_CALC : a == APP_NOTES ? ICON_APP_NOTES : a == APP_CLOCK ? ICON_APP_CLOCK : a == APP_CAL ? ICON_APP_CAL : ICON_APP_MUSIC; }
+static int dock_app(int a) { return a >= APP_COUNT ? APP_FILES : a; }   /* окна TextEdit и Preview в Dock живут под значком Files */
 static int lp_open;
 static void genie_finish(void);
 static void mc_toggle(void);
@@ -64,6 +99,8 @@ static void lp_close(void);
 static void lp_show(void);
 static void notify(const char *title, const char *text);
 static void notify_icon(const char *title, const char *text, int icon);
+static int nc_open;                                   /* центр уведомлений (spotlight.inc) */
+static i32 nc_clock_x(void);
 static int xf_tick(u32 dt);
 static int  sp_on;
 static void sp_toggle(void);
@@ -78,8 +115,8 @@ static void draw_window(int app, int focused);
 /* ---------- состояние ---------- */
 
 static sysinfo_t sys;
-static window_t  wins[APP_COUNT];
-static int       zorder[APP_COUNT];         /* порядок снизу вверх */
+static window_t  wins[WIN_COUNT];
+static int       zorder[WIN_COUNT];         /* порядок снизу вверх */
 static int       nz;
 static i32       cur_x, cur_y;
 static u8        btn_prev;
@@ -93,8 +130,8 @@ static int       clock24 = 1;
 static int       reduce_transp;
 static int       mc_on;                     /* Mission Control открыт (цель) */
 static i32       mc_v;                      /* 0..1024, плавно */
-static int       mc_n, mc_ids[APP_COUNT];   /* окна в обзоре */
-static i32       mc_x[APP_COUNT], mc_y[APP_COUNT], mc_w[APP_COUNT], mc_h[APP_COUNT];   /* куда раскладываются */
+static int       mc_n, mc_ids[WIN_COUNT];   /* окна в обзоре */
+static i32       mc_x[WIN_COUNT], mc_y[WIN_COUNT], mc_w[WIN_COUNT], mc_h[WIN_COUNT];   /* куда раскладываются */
 static int       mc_hover = -1;
 static int       dock_hide;                 /* 0 всегда виден, 1 автоскрытие, 2 умное (прячется, если мешает окну) */
 static i32       dock_hide_v;               /* 0 показан .. 1024 спрятан, плавно */
@@ -862,6 +899,16 @@ static void term_run_cmd(char *line)
         if (*arg) browser_open(arg);
     } else if (s_eq(line, "snake")) {
         open_window(APP_SNAKE);
+    } else if (s_eq(line, "calc")) {
+        open_window(APP_CALC);
+    } else if (s_eq(line, "notes")) {
+        open_window(APP_NOTES);
+    } else if (s_eq(line, "music")) {
+        open_window(APP_MUSIC);
+    } else if (s_eq(line, "clock")) {
+        open_window(APP_CLOCK);
+    } else if (s_eq(line, "calendar")) {
+        open_window(APP_CAL);
     } else if (s_eq(line, "files")) {
         open_window(APP_FILES);
     } else if (s_eq(line, "wallpaper")) {
@@ -901,7 +948,7 @@ static void term_run_cmd(char *line)
         if (s_eq(arg, "-a"))
             term_puts("EndixOS endix-v8 " ENDIX_VERSION " i686 own-kernel\n");
         else
-            term_puts("EndixOS 8.0 i686 (own kernel, written from scratch)\n");
+            term_puts("EndixOS " ENDIX_VERSION " i686 (own kernel, written from scratch)\n");
     } else if (s_eq(line, "uptime")) {
         char *p = s_put(buf, "up ");
         p = u_put(p, uptime_s / 60);
@@ -1303,7 +1350,7 @@ static void open_window(int app)
     w->minimized = w->maximized = 0;
     zorder[nz++] = app;
     if (!booting) {
-        bn_app = app;                       /* значок в Dock подпрыгивает, окно плавно вырастает */
+        bn_app = dock_app(app);             /* значок в Dock подпрыгивает, окно плавно вырастает */
         bn_t0 = now_ticks;
         genie_begin(app, 2);
         w->minimized = 1;
@@ -1564,7 +1611,7 @@ static void draw_dock(void)
         int slot = DSLOT(i);
         i32 sz = dk_s[slot];
         fb_blend_rect(ix + 4, iy + sz - 2, sz - 8, 3, RGB(0, 0, 0), 28);          /* лёгкая тень под значком */
-        icon_draw(i == TRASH_ID ? (fs_count(fs_trash()) > 0 ? ICON_TRASH_FULL : ICON_TRASH) : i, ix, iy - (i == bn_app ? bounce_height() : 0), sz);
+        icon_draw(i == TRASH_ID ? (fs_count(fs_trash()) > 0 ? ICON_TRASH_FULL : ICON_TRASH) : app_icon(i), ix, iy - (i == bn_app ? bounce_height() : 0), sz);
         if (i < APP_COUNT && wins[i].open)
             fb_fill_circle(ix + sz / 2, dy + dh - 5, 2, theme_is_dark() ? RGB(235, 235, 240) : RGB(50, 50, 56));
     }
@@ -1726,7 +1773,7 @@ static void genie_render(void)
         return;
     }
     i32 cx, cy, iw;
-    if (!dock_icon_center(gn_app, &cx, &cy, &iw)) return;
+    if (!dock_icon_center(dock_app(gn_app), &cx, &cy, &iw)) return;
     int p = genie_p();
     genie_draw(cx, cy, iw, gn_dir > 0 ? p : 1024 - p);
 }
@@ -1736,7 +1783,7 @@ static void genie_render(void)
 static void mc_layout(void)
 {
     i32 W = (i32)fb_width(), H = (i32)fb_height();
-    i32 order[APP_COUNT];                                   /* слева направо */
+    i32 order[WIN_COUNT];                                   /* слева направо */
     for (int i = 0; i < mc_n; i++) order[i] = mc_ids[i];
     for (int i = 0; i < mc_n; i++)
         for (int j = i + 1; j < mc_n; j++)
@@ -1980,7 +2027,7 @@ static void build_menu(int m)
         mi("Zoom", M_ZOOM, top < 0);
         mi("Mission Control", M_MC, 0);
         mi(0, 0, 0);
-        for (int i = 0; i < APP_COUNT; i++)
+        for (int i = 0; i < WIN_COUNT; i++)
             if (wins[i].open)
                 mi(app_name[i], M_OPEN + i, 0);
         break;
@@ -1994,6 +2041,17 @@ static void build_menu(int m)
 #define MI_H   22
 #define MI_SEP 9
 
+static const char *mi_key(int id)                 /* подсказка сочетания справа, как ⌘ в macOS */
+{
+    switch (id) {
+    case M_CLOSEWIN: return "Ctrl+W";
+    case M_QUIT:     return "Ctrl+Q";
+    case M_MIN:      return "Ctrl+M";
+    case M_MC:       return "F3";
+    }
+    return 0;
+}
+
 static void menu_rect(int m, i32 *x, i32 *y, i32 *w, i32 *h)
 {
     build_menu(m);
@@ -2001,6 +2059,7 @@ static void menu_rect(int m, i32 *x, i32 *y, i32 *w, i32 *h)
     for (int i = 0; i < mn; i++) {
         if (mitems[i].label) {
             i32 lw = font_width(mitems[i].label, FONT_REGULAR) + 40;
+            if (mi_key(mitems[i].id)) lw += font_width(mi_key(mitems[i].id), FONT_REGULAR) + 24;
             if (lw > mw) mw = lw;
             mh += MI_H;
         } else {
@@ -2051,6 +2110,9 @@ static void draw_menu_dropdown(int m)
             fb_fill_round_rect(x + 5, iy, w - 10, MI_H, 5, theme_accent(), 255);
         font_draw(x + 16, iy + 2, mitems[i].label,
                   hot ? RGB(255, 255, 255) : (mitems[i].disabled ? t->sub : t->text), FONT_REGULAR);
+        if (mi_key(mitems[i].id))
+            font_draw(x + w - 16 - font_width(mi_key(mitems[i].id), FONT_REGULAR), iy + 2, mi_key(mitems[i].id),
+                      hot ? RGB(235, 235, 245) : t->sub, FONT_REGULAR);
         iy += MI_H;
     }
 }
@@ -2096,7 +2158,7 @@ static void menu_exec(int id)
         open_window(APP_TERMINAL);
         break;
     default:
-        if (id >= M_OPEN && id < M_OPEN + APP_COUNT)
+        if (id >= M_OPEN && id < M_OPEN + WIN_COUNT)
             open_window(id - M_OPEN);
     }
 }
@@ -2159,10 +2221,12 @@ static void draw_menubar(void)
     char clock[48];
     format_clock(clock, 0);
     font_draw(W - 14 - font_width(clock, FONT_REGULAR), 3, clock, ink, FONT_REGULAR);
+    if (nc_open) fb_fill_round_rect(nc_clock_x() - 4, 2, (i32)W - nc_clock_x() - 6, MENUBAR_H - 5, 5, ink, 50);
     if (cc_is_open())
         fb_fill_round_rect(cc_icon_x() - 6, 2, 30, MENUBAR_H - 5, 5, ink, 50);
     cc_draw_icon(cc_icon_x(), ink);
     cc_draw_search_icon(cc_icon_x() - 30, 3, ink);
+    if (bat_width()) bat_draw(cc_icon_x() - 46 - bat_width(), 0, ink);
     if (sp_on) fb_fill_round_rect(cc_icon_x() - 36, 2, 26, MENUBAR_H - 5, 5, ink, 50);
 }
 
@@ -2217,7 +2281,7 @@ static int lp_hit(i32 px, i32 py)
 
 static void lp_draw_icon(int app, i32 x, i32 y)
 {
-    icon_draw(app, x, y, LP_ICON);
+    icon_draw(app_icon(app), x, y, LP_ICON);
 }
 
 static void lp_ring(i32 cx, i32 cy)
@@ -2368,7 +2432,7 @@ static int window_at(i32 x, i32 y);
 
 /* Участок фона под стеклом: запоминаем до рисования тела окна и возвращаем перед стеклом. */
 static u32 gl_save_t[FB_MAX_W * TITLE_H], gl_save_s[200 * 800];
-static const i32 app_sidebar[APP_COUNT] = { 150, 0, 170, 0, 0, 0 };
+static const i32 app_sidebar[WIN_COUNT] = { 150, 0, 170, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
 static void rect_save(u32 *buf, i32 x, i32 y, i32 w, i32 h)
 {
@@ -2584,7 +2648,7 @@ static void draw_window(int app, int focused)
         }
     }
 
-    const char *ttl = (app == APP_BROWSER && browser_title()[0]) ? browser_title() : app_title[app];
+    const char *ttl = (app == APP_BROWSER && browser_title()[0]) ? browser_title() : app == APP_TEXTEDIT ? te_title() : app == APP_PREVIEW ? viewer_title() : app_title[app];
     i32 tw = font_width(ttl, FONT_BOLD);
     if (tw > w->w - 190) { tw = w->w - 190; }
     font_draw(w->x + (w->w - tw) / 2, w->y + (TITLE_H - font_height[FONT_BOLD]) / 2,
@@ -2599,33 +2663,43 @@ static void draw_window(int app, int focused)
     case APP_SETTINGS: settings_draw(ox, oy, cw, ch); break;
     case APP_SNAKE:    snake_draw(ox, oy, cw, ch); break;
     case APP_BROWSER:  browser_draw(ox, oy, focused); break;
+    case APP_CALC:     calc_draw(ox, oy, cw, ch); break;
+    case APP_NOTES:    notes_draw(ox, oy, cw, ch); break;
+    case APP_CLOCK:    clk_draw(ox, oy, cw, ch); break;
+    case APP_CAL:      cal_draw(ox, oy, cw, ch); break;
+    case APP_MUSIC:    music_draw(ox, oy, cw, ch); break;
+    case APP_TEXTEDIT: te_draw(ox, oy, cw, ch); break;
+    case APP_PREVIEW:  viewer_draw(ox, oy, cw, ch); break;
     }
 }
 
 /* ---------- курсор ---------- */
 
-static const char *const cursor_img[17] = {
-    "X           ",
-    "XX          ",
-    "X.X         ",
-    "X..X        ",
-    "X...X       ",
-    "X....X      ",
-    "X.....X     ",
-    "X......X    ",
-    "X.......X   ",
-    "X........X  ",
-    "X.....XXXXX ",
-    "X..X..X     ",
-    "X.X X..X    ",
-    "XX  X..X    ",
-    "X    X..X   ",
-    "     X..X   ",
-    "      XX    ",
+static const char *const cursor_img[20] = {      /* стрелка как в macOS: чёрная заливка, белая кромка; '#' - чёрный, 'o' - белый */
+    "               ",
+    "ooo            ",
+    "o#oo           ",
+    "o##oo          ",
+    "o###oo         ",
+    "o####oo        ",
+    "o#####oo       ",
+    "o######oo      ",
+    "o#######oo     ",
+    "o########oo    ",
+    "o#########oo   ",
+    "o##########oo  ",
+    "o###########o  ",
+    "o#######ooooo  ",
+    "o###o###oo     ",
+    "o##ooo###o     ",
+    "o#oo o###oo    ",
+    "ooo  o####o    ",
+    "     oo###o    ",
+    "      o##oo    ",
 };
 
-#define CURSOR_W 12
-#define CURSOR_H 17
+#define CURSOR_W 15
+#define CURSOR_H 20
 
 /* Форма стрелки изменения размера: 1 - влево-вправо, 2 - вверх-вниз, 3 - NWSE, 4 - NESW. */
 static int resize_cursor_kind(void)
@@ -2660,12 +2734,12 @@ static void draw_cursor(void)
         for (i32 j = -9; j <= 9; j++)
             for (i32 i = -9; i <= 9; i++) {
                 if (rc_in(kind, i, j)) {
-                    fb_frame_put_pixel(cur_x + i, cur_y + j, RGB(255, 255, 255));
+                    fb_frame_put_pixel(cur_x + i, cur_y + j, RGB(0, 0, 0));
                 } else {
                     for (i32 k = -1; k <= 1; k++)
                         for (i32 m = -1; m <= 1; m++)
                             if (rc_in(kind, i + m, j + k)) {
-                                fb_frame_put_pixel(cur_x + i, cur_y + j, RGB(0, 0, 0));
+                                fb_frame_put_pixel(cur_x + i, cur_y + j, RGB(255, 255, 255));
                                 k = 2;
                                 break;
                             }
@@ -2679,13 +2753,13 @@ static void draw_cursor(void)
     for (int j = 0; j < CURSOR_H; j++)
         for (int i = 0; cursor_img[j][i]; i++) {
             char c = cursor_img[j][i];
-            if (c == 'X')
-                fb_frame_put_pixel(cur_x + i, cur_y + j, RGB(0, 0, 0));
-            else if (c == '.')
-                fb_frame_put_pixel(cur_x + i, cur_y + j, RGB(255, 255, 255));
+            if (c == '#')
+                fb_frame_put_pixel(cur_x + i - 1, cur_y + j - 1, RGB(0, 0, 0));
+            else if (c == 'o')
+                fb_frame_put_pixel(cur_x + i - 1, cur_y + j - 1, RGB(255, 255, 255));
         }
-    drawn_x = cur_x;
-    drawn_y = cur_y;
+    drawn_x = cur_x - 1;
+    drawn_y = cur_y - 1;
     drawn_w = CURSOR_W;
     drawn_h = CURSOR_H;
 }
@@ -2701,6 +2775,8 @@ void wm_init(const sysinfo_t *info)
     cwd = fs_home();
     files_init();
     snake_reset();
+    calc_reset();
+    notes_init();
     browser_init();
 
     cur_x = (i32)sys.width / 2;
@@ -2721,8 +2797,19 @@ void wm_init(const sysinfo_t *info)
 
 int wm_set_time(u32 hour, u32 min, u32 day, u32 month, u32 year)
 {
+    if (scenery_set_hour((int)hour)) {                 /* живые обои: сменились день и ночь */
+        int w = settings_wallpaper();
+        if (w >= WALL_COUNT && w < WALL_PHOTO0 && scenery_dynamic(w - WALL_COUNT)) settings_set_wallpaper(w);
+    }
     int changed = !have_time || hour != t_hour || min != t_min || day != t_day;
     t_hour = hour; t_min = min; t_day = day; t_mon = month; t_year = year;
+    ts_note(hour, min, day, month, year);
+    cal_set_today(year, month, day);
+    {   /* день недели (пн = 0) по Сакамото */
+        static const int tt[12] = { 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4 };
+        int y = (int)year - (month < 3), m = (int)month < 1 || month > 12 ? 1 : (int)month;
+        icon_set_date((int)day, ((y + y / 4 - y / 100 + y / 400 + tt[m - 1] + (int)day) + 6) % 7);
+    }
     widgets_set_time(hour, min, day, month, year);
     have_time = 1;
     return changed;
@@ -2731,6 +2818,7 @@ int wm_set_time(u32 hour, u32 min, u32 day, u32 month, u32 year)
 void wm_set_uptime(u32 seconds)
 {
     uptime_s = seconds;
+    ts_tick(seconds);
     widgets_set_uptime(seconds);
     if (widgets_visible()) scene_dirty = 1;
 }
@@ -2856,6 +2944,12 @@ int wm_tick(u32 ticks)
     if (nj_dirty) { nj_dirty = 0; cm = 1; }
     if (wins[APP_BROWSER].open && browser_tick(ticks) && !wins[APP_BROWSER].minimized) cm = 1;
     if (wins[APP_SETTINGS].open && !wins[APP_SETTINGS].minimized && settings_animating()) cm = 1;
+    if (clk_tick(ticks, wins[APP_CLOCK].open && !wins[APP_CLOCK].minimized && top_app() == APP_CLOCK)) cm = 1;
+    if (bat_poll(ticks)) cm = 1;
+    if (music_tick(ticks, wins[APP_MUSIC].open && !wins[APP_MUSIC].minimized)) cm = 1;
+    if (clk_fired()) notify_icon("Timer", "Time's up", ICON_APP_CLOCK);
+    if (te_tick(ticks, wins[APP_TEXTEDIT].open && !wins[APP_TEXTEDIT].minimized && top_app() == APP_TEXTEDIT)) cm = 1;
+    if (notes_tick(ticks, wins[APP_NOTES].open && !wins[APP_NOTES].minimized && top_app() == APP_NOTES)) cm = 1;
     return snake_tick(ticks, active) | cm | gn;
 }
 
@@ -2907,6 +3001,7 @@ static void desktop_action(int act)
 static void on_press(void)
 {
     i32 W = (i32)fb_width();
+    if (files_menu_is_open() && !(top_app() == APP_FILES && window_at(cur_x, cur_y) == APP_FILES)) files_menu_close();
     if (sp_on) {                                         /* Spotlight: строка результата или клик мимо */
         int r = sp_row_at(cur_x, cur_y);
         if (r >= 0) sp_run(r);
@@ -2917,7 +3012,13 @@ static void on_press(void)
         if (cur_y >= MENUBAR_H) widgets_edit_press(cur_x, cur_y);
         return;
     }
+    if (nc_open) {                                       /* центр уведомлений: карточка, Clear или клик мимо */
+        if (cur_y < MENUBAR_H && cur_x >= nc_clock_x()) { nc_close(); return; }
+        if (!nc_press(cur_x, cur_y)) nc_close();
+        return;
+    }
     if (nt_hit(cur_x, cur_y)) { nt_dismiss_at(cur_x, cur_y); return; }
+    if (cur_y < MENUBAR_H && cur_x >= nc_clock_x()) { nc_toggle(); return; }
     if (cur_y < MENUBAR_H && cur_x >= cc_icon_x() - 38 && cur_x < cc_icon_x() - 8) {
         sp_toggle();
         return;
@@ -3047,6 +3148,20 @@ static void on_press(void)
         snake_click();
     else if (app == APP_BROWSER)
         browser_click(cx, cy, now_ticks);
+    else if (app == APP_CALC)
+        calc_click(cx, cy);
+    else if (app == APP_NOTES)
+        notes_click(cx, cy);
+    else if (app == APP_CLOCK)
+        clk_click(cx, cy, now_ticks);
+    else if (app == APP_CAL)
+        cal_click(cx, cy);
+    else if (app == APP_MUSIC)
+        music_click(cx, cy);
+    else if (app == APP_TEXTEDIT)
+        te_click(cx, cy);
+    else if (app == APP_PREVIEW)
+        viewer_click(cx, cy, content_w(app));
 }
 
 static void lock_now(void)
@@ -3088,9 +3203,11 @@ void wm_handle_event(const event_t *e)
         return;
     }
     if (e->type == EV_WHEEL) {
+        if (nc_open) { if (nc_wheel(e->a)) scene_dirty = 1; return; }
         int wa = window_at(cur_x, cur_y);
         if (wa == APP_BROWSER && !wins[wa].minimized && !mc_on && !lp_open) { browser_wheel(e->a); scene_dirty = 1; }
         else if (wa == APP_FILES && !wins[wa].minimized && !mc_on && !lp_open) { if (files_wheel(e->a)) scene_dirty = 1; }
+        else if (wa == APP_MUSIC && !wins[wa].minimized && !mc_on && !lp_open) { if (music_wheel(e->a)) scene_dirty = 1; }
         else if (wa == APP_TERMINAL && !wins[wa].minimized && !mc_on && !lp_open && !cm_on) {
             tview += e->a > 0 ? 3 : -3;
             tview = tview < 0 ? 0 : tview > ring_n ? ring_n : tview;
@@ -3130,6 +3247,18 @@ void wm_handle_event(const event_t *e)
             if (desktop_ctx_is_open()) { desktop_ctx_hover(cur_x, cur_y); scene_dirty = 1; }
             if (dm_id >= 0) { int hi = dm_item_at(cur_x, cur_y); if (hi != dm_hover) { dm_hover = hi; scene_dirty = 1; } }
             if (sp_on) { int hr = sp_row_at(cur_x, cur_y); if (hr >= 0 && hr != sp_sel && cursor_moved) sp_sel = hr; scene_dirty = 1; }
+            if (wins[APP_FILES].open && files_menu_is_open() && top_app() == APP_FILES) {
+                i32 fx, fy;
+                content_origin(APP_FILES, &fx, &fy);
+                if (files_hover(cur_x - fx, cur_y - fy)) scene_dirty = 1;
+            }
+            if (rp && !mc_on && !lp_open && menu_open < 0 && !cc_is_open() && window_at(cur_x, cur_y) == APP_FILES && top_app() == APP_FILES) {
+                i32 fx, fy;
+                content_origin(APP_FILES, &fx, &fy);
+                desktop_ctx_close();
+                files_rclick(cur_x - fx, cur_y - fy);
+                scene_dirty = 1;
+            } else
             if (rp && !mc_on && !lp_open && menu_open < 0 && !cc_is_open()) {
                 if (widgets_edit_active()) {
                     /* в режиме редактирования правая кнопка ничего не открывает */
@@ -3197,6 +3326,10 @@ void wm_handle_event(const event_t *e)
             sp_toggle();
             return;
         }
+        if (nc_open) {
+            if (e->a == 27) nc_close();
+            return;
+        }
         if (sp_on) {
             sp_key(e->a);
             return;
@@ -3230,12 +3363,30 @@ void wm_handle_event(const event_t *e)
             desktop_deselect();
             return;
         }
+        if (e->b && top_app() != APP_TERMINAL) {              /* Ctrl+W/Q/M и Ctrl+Tab, как ⌘ в macOS */
+            int ta = top_app(), k = e->a | 32;
+            if (ta >= 0 && (k == 'w' || k == 'q')) { close_window(ta); return; }
+            if (ta >= 0 && k == 'm') { minimize_window(ta); return; }
+            if (e->a == '\t') {
+                for (int j = 1; j < WIN_COUNT; j++) {
+                    int n = (ta + j) % WIN_COUNT;
+                    if (ta >= 0 && wins[n].open && !wins[n].minimized) { open_window(n); return; }
+                }
+            }
+        }
         switch (top_app()) {
         case APP_TERMINAL: term_key(e->a, e->b); break;
         case APP_SNAKE:    snake_key(e->a);      break;
         case APP_BROWSER:  browser_key(e->a, e->b); scene_dirty = 1; break;
-        case APP_FILES:    files_key(e->a);      break;
+        case APP_FILES:    files_key(e->a, e->b); scene_dirty = 1; break;
         case APP_SETTINGS: settings_key(e->a);   break;
+        case APP_CALC:     calc_key(e->a); scene_dirty = 1; break;
+        case APP_NOTES:    notes_key(e->a, e->b); scene_dirty = 1; break;
+        case APP_CLOCK:    clk_key(e->a); scene_dirty = 1; break;
+        case APP_CAL:      cal_key(e->a); scene_dirty = 1; break;
+        case APP_MUSIC:    music_key(e->a); scene_dirty = 1; break;
+        case APP_TEXTEDIT: te_key(e->a, e->b); scene_dirty = 1; break;
+        case APP_PREVIEW:  viewer_key(e->a); scene_dirty = 1; break;
         default: break;
         }
     }
@@ -3266,6 +3417,7 @@ static void render_scene(int mode)                  /* 0 окна, 1 Launchpad �
     widgets_draw(1);
     nt_draw();
     sp_draw();
+    nc_draw();
     if (cc_v > 0) {                                 /* Control Center выезжает из-под меню-бара */
         i32 rx, ry, rw, rh;
         cc_bounds((i32)fb_width(), &rx, &ry, &rw, &rh);
@@ -3389,10 +3541,14 @@ void wm_invalidate(void)
 }
 
 /* Один кадр, если есть что показать. Сцена не чаще раза в 20 мс, курсор - сразу. */
+static int frame_was_scene;
+int wm_last_was_scene(void) { return frame_was_scene; }
+
 int wm_frame(u32 ticks)
 {
+    frame_was_scene = 0;
     if (scene_dirty && (i32)(ticks - last_scene_tick) >= 2) {
-        last_scene_tick = ticks;
+        last_scene_tick = ticks; frame_was_scene = 1;
         wm_render();
         fb_flip();
         draw_cursor();
@@ -3406,4 +3562,14 @@ int wm_frame(u32 ticks)
         return 1;
     }
     return 0;
+}
+
+/* Files: двойной щелчок по файлу. Картинка - в Preview, текст - в TextEdit; остальное не открываем. */
+void wm_open_file(int node)
+{
+    if (viewer_is_image(node)) {
+        if (viewer_open(node) == 0) { open_window(APP_PREVIEW); raise_window(APP_PREVIEW); scene_dirty = 1; }
+    } else if (te_is_text(node)) {
+        if (te_open(node) == 0) { open_window(APP_TEXTEDIT); raise_window(APP_TEXTEDIT); scene_dirty = 1; }
+    } else notify("Can't open file", "This file type is not supported yet.");
 }

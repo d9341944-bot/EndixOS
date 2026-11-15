@@ -46,7 +46,9 @@ enum { GLASS_REFRACT, GLASS_BLUR, GLASS_FROST, GLASS_EDGE, GLASS_VIVID, GLASS_PA
 void fb_glass_param_set(int id, int v);   /* настройки Liquid Glass, 0..100 */
 int  fb_glass_param_get(int id);
 void fb_glass_param_reset(void);
-void fb_glass_set_reduced(int on);        /* без размытия и плотнее - быстрее и контрастнее */
+void fb_glass_set_reduced(int on);   /* без размытия и плотнее - быстрее и контрастнее */
+void fb_perf_set(int level);       /* 0 полное качество, 1 без теней и с лёгким размытием, 2 без размытия стекла */
+int  fb_perf_get(void);
 void fb_glass(i32 x, i32 y, i32 w, i32 h, i32 r, u32 corners, i32 br, u32 tint, u32 ta, u32 sheen);             /* сколько байт записано в видеопамять всего */
 
 #endif

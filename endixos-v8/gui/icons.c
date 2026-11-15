@@ -19,6 +19,8 @@ typedef struct {
 } shp;
 
 static i32 g_er;                          /* 1: фигура стирает альфу (вырез) */
+static i32 g_style, g_tone;                /* стиль значков; g_tone: 2/3 - цвета фигур переводятся в одноцветные */
+static u32 g_accent;
 static i32 g_sh;                          /* >0: рисуем тень фигуры, смещённую вниз на g_sh px */
 
 typedef struct { u32 c0, c1; i32 a0, a1; i32 y0, y1; } paint;
@@ -154,8 +156,20 @@ static void put(u32 *cv, i32 x, i32 y, u32 col, i32 a)
     cv[y * S + x] = (u32)oa << 24 | r;
 }
 
+static u32 tone_map(u32 c)
+{
+    u32 r = c >> 16 & 255, g = c >> 8 & 255, b = c & 255;
+    u32 lum = (30 * r + 59 * g + 11 * b) / 100, v = 110 + lum * 145 / 255;       /* глифы всегда светлые на тёмной плитке */
+    if (g_tone == 2) return v << 16 | v << 8 | v;
+    u32 tr = (g_accent >> 16 & 255) + (255 - (g_accent >> 16 & 255)) * 45 / 100;
+    u32 tg = (g_accent >> 8 & 255) + (255 - (g_accent >> 8 & 255)) * 45 / 100;
+    u32 tb = (g_accent & 255) + (255 - (g_accent & 255)) * 45 / 100;
+    return (tr * v / 255) << 16 | (tg * v / 255) << 8 | (tb * v / 255);
+}
+
 static void fill(u32 *cv, const shp *s, const shp *clip, paint p)
 {
+    if (g_tone && !g_er) { p.c0 = tone_map(p.c0); p.c1 = tone_map(p.c1); }
     i32 x0, y0, x1, y1;
     bbox(s, &x0, &y0, &x1, &y1);
     for (i32 y = y0; y < y1; y++) {
@@ -197,11 +211,24 @@ static shp tile(void) { return RR(64, 64, 62, 62, 29); }
 static void base(u32 *cv, u32 top, u32 bot)
 {
     shp t = tile();
-    fill(cv, &t, 0, P(top, bot, 255, 2, 126));
-    fill(cv, &t, 0, PA(WHITE, 70, 0, 2, 72));                  /* блик сверху */
-    shp rim = STK(tile(), U + U / 2);
-    fill(cv, &rim, 0, PA(WHITE, 130, 0, 2, 56));               /* светлая кромка */
-    fill(cv, &rim, 0, PA(BLACK, 0, 70, 70, 126));              /* тёмная внизу */
+    i32 tone = g_tone; g_tone = 0;                              /* плитка красится своими цветами */
+    if (g_style == ICON_STYLE_MONO) { top = C(70, 70, 76); bot = C(14, 14, 18); }
+    else if (g_style == ICON_STYLE_TINT) { top = lerp_c(g_accent, BLACK, 60, 100); bot = lerp_c(g_accent, BLACK, 88, 100); }
+    if (g_style == ICON_STYLE_GLASS) {                          /* Liquid Glass: полупрозрачная плитка, яркая кромка и блик */
+        fill(cv, &t, 0, P(lerp_c(top, WHITE, 18, 100), lerp_c(bot, WHITE, 8, 100), 165, 2, 126));
+        fill(cv, &t, 0, PA(WHITE, 120, 0, 2, 80));
+        shp inner = STK(tile(), 5 * U);
+        fill(cv, &inner, 0, PA(WHITE, 0, 70, 60, 126));         /* свет снизу изнутри */
+        shp rim = STK(tile(), 2 * U + U / 2);
+        fill(cv, &rim, 0, PA(WHITE, 235, 90, 2, 126));
+    } else {
+        fill(cv, &t, 0, P(top, bot, 255, 2, 126));
+        fill(cv, &t, 0, PA(WHITE, g_style ? 46 : 70, 0, 2, 72));        /* блик сверху */
+        shp rim = STK(tile(), U + U / 2);
+        fill(cv, &rim, 0, PA(WHITE, g_style ? 90 : 130, 0, 2, 56));     /* светлая кромка */
+        fill(cv, &rim, 0, PA(BLACK, 0, 70, 70, 126));                   /* тёмная внизу */
+    }
+    g_tone = tone;
 }
 
 static void mix_white(u32 c, i32 pct, u32 *out)
@@ -228,28 +255,28 @@ static void ic_launchpad(u32 *cv)
     }
 }
 
-/* ---- Browser: компас ---- */
+/* ---- Browix: глобус ---- */
 static void ic_browser(u32 *cv)
 {
-    base(cv, C(110, 205, 255), C(20, 110, 235));
+    base(cv, C(96, 224, 214), C(24, 96, 220));
     shp disc = CI(64, 64, 46);
-    fill(cv, &disc, 0, P(C(255, 255, 255), C(214, 232, 255), 255, 18, 110));
-    shp ring = STK(CI(64, 64, 46), 3 * U);
-    fill(cv, &ring, 0, PA(C(30, 110, 240), 110, 0, 18, 110));
-    shp t1 = CA(64, 24, 64, 31, 1), t2 = CA(64, 97, 64, 104, 1), t3 = CA(24, 64, 31, 64, 1), t4 = CA(97, 64, 104, 64, 1);
-    fill(cv, &t1, 0, P(C(60, 130, 235), C(60, 130, 235), 255, 0, 127)); fill(cv, &t2, 0, P(C(60, 130, 235), C(60, 130, 235), 255, 0, 127));
-    fill(cv, &t3, 0, P(C(60, 130, 235), C(60, 130, 235), 255, 0, 127)); fill(cv, &t4, 0, P(C(60, 130, 235), C(60, 130, 235), 255, 0, 127));
-    shp nr = ROT(RR(64, 46, 8, 20, 6), 2, 64, 64), nw = ROT(RR(64, 82, 8, 20, 6), 2, 64, 64);
-    fill(cv, &nw, 0, P(C(150, 160, 178), C(112, 122, 142), 255, 60, 110));
-    fill(cv, &nr, 0, P(C(255, 110, 96), C(232, 40, 44), 255, 20, 70));
-    shp hub = CI(64, 64, 4);
-    fill(cv, &hub, 0, P(WHITE, WHITE, 255, 0, 127));
+    fill(cv, &disc, 0, P(C(60, 150, 240), C(20, 70, 190), 255, 18, 110));
+    shp ring = STK(CI(64, 64, 46), 5 * U);
+    fill(cv, &ring, 0, P(C(255, 255, 255), C(206, 230, 255), 255, 18, 110));
+    shp mer = STK(RR(64, 64, 20, 46, 20), 3 * U);
+    fill(cv, &mer, 0, PA(WHITE, 235, 235, 0, S));
+    shp clip = CI(64, 64, 45);
+    shp v = CA(64, 20, 64, 108, 1), h0 = CA(18, 64, 110, 64, 1), h1 = CA(24, 41, 104, 41, 1), h2 = CA(24, 87, 104, 87, 1);
+    fill(cv, &v, &clip, PA(WHITE, 235, 235, 0, S)); fill(cv, &h0, &clip, PA(WHITE, 235, 235, 0, S));
+    fill(cv, &h1, &clip, PA(WHITE, 190, 190, 0, S)); fill(cv, &h2, &clip, PA(WHITE, 190, 190, 0, S));
+    shp sp = CI(48, 44, 7);                                     /* блик на «стекле» */
+    fill(cv, &sp, &clip, PA(WHITE, 90, 0, 30, 58));
 }
 
 /* ---- Files: папка ---- */
 static void ic_files(u32 *cv)
 {
-    base(cv, C(96, 190, 255), C(26, 112, 240));
+    base(cv, C(40, 200, 255), C(0, 120, 250));
     SHADOWED({
         shp tab = RR(46, 40, 19, 9, 5), back = RR(64, 58, 40, 24, 7);
         fill(cv, &tab, 0, P(C(176, 214, 255), C(130, 182, 250), 255, 31, 49));
@@ -419,6 +446,106 @@ static void glyph(u32 *cv, int kind, u32 col)
     }
 }
 
+
+/* ---- эмодзи для аватарок: рисуются фигурами, без плитки ---- */
+static const u32 DK = 0x5A3A22;
+static void eyes(u32 *cv, i32 y, i32 dx, i32 r) { shp a = CI(64 - dx, y, r), b = CI(64 + dx, y, r); fill(cv, &a, 0, SOLID(DK)); fill(cv, &b, 0, SOLID(DK)); }
+static void smile(u32 *cv, i32 y, i32 w, i32 d)          /* улыбка из отрезков по дуге */
+{
+    i32 xs[5] = { 64 - w, 64 - w * 6 / 10, 64, 64 + w * 6 / 10, 64 + w };
+    i32 ys[5] = { y, y + d * 7 / 10, y + d, y + d * 7 / 10, y };
+    for (int i = 0; i < 4; i++) { shp l = CA(xs[i], ys[i], xs[i + 1], ys[i + 1], 3); fill(cv, &l, 0, SOLID(DK)); }
+}
+static void yface(u32 *cv)
+{
+    shp f = CI(64, 64, 54);
+    SHADOWED({ fill(cv, &f, 0, P(C(255, 226, 86), C(255, 178, 36), 255, 10, 118)); });
+    shp h = STK(CI(64, 64, 54), U);
+    fill(cv, &h, 0, PA(WHITE, 150, 0, 10, 60));
+}
+static void ic_emoji(u32 *cv, int n)
+{
+    switch (n) {
+    case 0: yface(cv); eyes(cv, 54, 20, 6); smile(cv, 78, 26, 14); {
+        shp c1 = CI(34, 76, 7), c2 = CI(94, 76, 7); fill(cv, &c1, 0, PA(C(255, 120, 110), 120, 120, 0, S)); fill(cv, &c2, 0, PA(C(255, 120, 110), 120, 120, 0, S)); } break;
+    case 1: yface(cv); {                                                       /* очки */
+        shp a = RR(44, 56, 17, 11, 6), b = RR(84, 56, 17, 11, 6), br = CA(58, 54, 70, 54, 2);
+        fill(cv, &a, 0, P(C(60, 62, 72), C(14, 14, 18), 255, 45, 67)); fill(cv, &b, 0, P(C(60, 62, 72), C(14, 14, 18), 255, 45, 67)); fill(cv, &br, 0, SOLID(C(14, 14, 18)));
+        shp g1 = CA(36, 52, 46, 50, 2); fill(cv, &g1, 0, PA(WHITE, 160, 160, 0, S)); }
+        smile(cv, 82, 24, 12); break;
+    case 2: yface(cv); { shp e = CI(64 + 20, 54, 6); fill(cv, &e, 0, SOLID(DK));
+        shp l1 = CA(34, 56, 44, 50, 3), l2 = CA(44, 50, 54, 56, 3); fill(cv, &l1, 0, SOLID(DK)); fill(cv, &l2, 0, SOLID(DK)); }
+        smile(cv, 78, 26, 14); break;
+    case 3: {                                                                  /* сердце */
+        shp c1 = CI(46, 48, 26), c2 = CI(82, 48, 26), d = ROT(RR(64, 72, 30, 30, 5), 2, 64, 72);
+        SHADOWED({ paint p = P(C(255, 110, 120), C(222, 24, 56), 255, 20, 116); fill(cv, &c1, 0, p); fill(cv, &c2, 0, p); fill(cv, &d, 0, p); });
+        shp hl = CA(36, 40, 42, 33, 4); fill(cv, &hl, 0, PA(WHITE, 190, 190, 0, S)); break; }
+    case 4: {                                                                  /* звезда */
+        shp a = ROT(RR(64, 64, 32, 32, 5), 0, 64, 64), b = ROT(RR(64, 64, 32, 32, 5), 2, 64, 64);
+        shp c = ROT(RR(64, 64, 8, 52, 3), 0, 64, 64), d = ROT(RR(64, 64, 52, 8, 3), 0, 64, 64);
+        SHADOWED({ paint p = P(C(255, 236, 110), C(255, 176, 20), 255, 12, 116); fill(cv, &b, 0, p); fill(cv, &a, 0, p); fill(cv, &c, 0, p); fill(cv, &d, 0, p); });
+        break; }
+    case 5: {                                                                  /* кот */
+        shp e1 = ROT(RR(34, 36, 17, 17, 4), 2, 34, 36), e2 = ROT(RR(94, 36, 17, 17, 4), 2, 94, 36), h = CI(64, 70, 46);
+        SHADOWED({ paint p = P(C(255, 200, 124), C(242, 150, 70), 255, 24, 116); fill(cv, &e1, 0, p); fill(cv, &e2, 0, p); fill(cv, &h, 0, p); });
+        shp i1 = ROT(RR(34, 38, 9, 9, 2), 2, 34, 38), i2 = ROT(RR(94, 38, 9, 9, 2), 2, 94, 38); fill(cv, &i1, 0, SOLID(C(255, 160, 170))); fill(cv, &i2, 0, SOLID(C(255, 160, 170)));
+        eyes(cv, 64, 20, 6); shp n = CI(64, 76, 5); fill(cv, &n, 0, SOLID(C(240, 110, 130)));
+        shp w1 = CA(14, 78, 38, 80, 1), w2 = CA(14, 90, 38, 86, 1), w3 = CA(114, 78, 90, 80, 1), w4 = CA(114, 90, 90, 86, 1);
+        fill(cv, &w1, 0, SOLID(DK)); fill(cv, &w2, 0, SOLID(DK)); fill(cv, &w3, 0, SOLID(DK)); fill(cv, &w4, 0, SOLID(DK));
+        smile(cv, 88, 10, 6); break; }
+    case 6: {                                                                  /* собака */
+        shp e1 = RR(24, 62, 13, 28, 10), e2 = RR(104, 62, 13, 28, 10), h = CI(64, 66, 42), sn = CI(64, 84, 22);
+        SHADOWED({ fill(cv, &e1, 0, SOLID(C(150, 100, 60))); fill(cv, &e2, 0, SOLID(C(150, 100, 60))); fill(cv, &h, 0, P(C(236, 190, 130), C(212, 160, 100), 255, 24, 108)); });
+        fill(cv, &sn, 0, SOLID(C(250, 228, 196))); eyes(cv, 58, 18, 6);
+        shp n = CI(64, 76, 8); fill(cv, &n, 0, SOLID(C(40, 30, 30)));
+        shp m = CA(64, 84, 64, 92, 2); fill(cv, &m, 0, SOLID(DK)); break; }
+    case 7: {                                                                  /* панда */
+        shp e1 = CI(30, 30, 17), e2 = CI(98, 30, 17), h = CI(64, 68, 46);
+        SHADOWED({ fill(cv, &e1, 0, SOLID(C(40, 40, 46))); fill(cv, &e2, 0, SOLID(C(40, 40, 46))); fill(cv, &h, 0, P(WHITE, C(228, 230, 236), 255, 22, 114)); });
+        shp p1 = ROT(RR(46, 64, 11, 15, 8), 1, 46, 64), p2 = ROT(RR(82, 64, 11, 15, 8), 15, 82, 64);
+        fill(cv, &p1, 0, SOLID(C(40, 40, 46))); fill(cv, &p2, 0, SOLID(C(40, 40, 46)));
+        shp w1 = CI(47, 63, 4), w2 = CI(81, 63, 4), n = CI(64, 80, 6);
+        fill(cv, &w1, 0, SOLID(WHITE)); fill(cv, &w2, 0, SOLID(WHITE)); fill(cv, &n, 0, SOLID(C(40, 40, 46))); smile(cv, 88, 10, 6); break; }
+    case 8: {                                                                  /* робот */
+        shp ant = CA(64, 36, 64, 22, 3), tip = CI(64, 18, 7), hd = RR(64, 72, 42, 36, 12);
+        fill(cv, &ant, 0, SOLID(C(150, 156, 170))); fill(cv, &tip, 0, SOLID(C(255, 70, 70)));
+        SHADOWED({ fill(cv, &hd, 0, P(C(222, 226, 236), C(150, 158, 176), 255, 36, 108)); });
+        shp e1 = CI(46, 68, 10), e2 = CI(82, 68, 10), m = RR(64, 94, 24, 6, 3);
+        fill(cv, &e1, 0, P(C(120, 240, 255), C(20, 160, 220), 255, 58, 78)); fill(cv, &e2, 0, P(C(120, 240, 255), C(20, 160, 220), 255, 58, 78));
+        fill(cv, &m, 0, SOLID(C(60, 66, 80))); break; }
+    case 9: {                                                                  /* привидение */
+        shp top = CI(64, 56, 40), body = RR(64, 84, 40, 30, 0);
+        SHADOWED({ paint p = P(WHITE, C(214, 222, 240), 255, 16, 116); fill(cv, &top, 0, p); fill(cv, &body, 0, p); });
+        for (int k = 0; k < 4; k++) { shp w = CI(32 + k * 21, 118, 11); cut(cv, &w, 0); }
+        shp e1 = CI(48, 56, 7), e2 = CI(80, 56, 7), m = CI(64, 76, 6);
+        fill(cv, &e1, 0, SOLID(C(50, 56, 80))); fill(cv, &e2, 0, SOLID(C(50, 56, 80))); fill(cv, &m, 0, SOLID(C(50, 56, 80))); break; }
+    case 10: {                                                                 /* инопланетянин */
+        shp h = CI(64, 60, 46), ch = RR(64, 86, 22, 24, 12);
+        SHADOWED({ paint p = P(C(150, 240, 120), C(70, 190, 80), 255, 14, 116); fill(cv, &h, 0, p); fill(cv, &ch, 0, p); });
+        shp e1 = ROT(RR(44, 62, 11, 17, 9), 2, 44, 62), e2 = ROT(RR(84, 62, 11, 17, 9), 14, 84, 62);
+        fill(cv, &e1, 0, SOLID(C(20, 40, 30))); fill(cv, &e2, 0, SOLID(C(20, 40, 30)));
+        shp g1 = CI(40, 56, 3), g2 = CI(88, 56, 3); fill(cv, &g1, 0, SOLID(WHITE)); fill(cv, &g2, 0, SOLID(WHITE));
+        shp m = CA(56, 96, 72, 96, 2); fill(cv, &m, 0, SOLID(C(30, 90, 40))); break; }
+    case 11: {                                                                 /* огонь */
+        shp b = CI(64, 82, 36), t = ROT(RR(64, 44, 22, 22, 4), 2, 64, 44);
+        SHADOWED({ paint p = P(C(255, 190, 50), C(244, 70, 30), 255, 14, 118); fill(cv, &t, 0, p); fill(cv, &b, 0, p); });
+        shp ib = CI(64, 94, 20), it = ROT(RR(64, 72, 12, 12, 3), 2, 64, 72);
+        paint q = P(C(255, 250, 160), C(255, 190, 50), 255, 62, 114); fill(cv, &it, 0, q); fill(cv, &ib, 0, q); break; }
+    case 12: {                                                                 /* луна */
+        shp m = CI(60, 64, 48), c = CI(86, 50, 40);
+        SHADOWED({ fill(cv, &m, 0, P(C(255, 236, 130), C(246, 190, 60), 255, 16, 112)); });
+        cut(cv, &c, 0); break; }
+    case 13: {                                                                 /* солнце */
+        shp c = CI(64, 64, 28);
+        for (int k = 0; k < 16; k += 2) { shp r = ROT(RR(64, 20, 5, 12, 3), k, 64, 64); fill(cv, &r, 0, SOLID(C(255, 190, 40))); }
+        SHADOWED({ fill(cv, &c, 0, P(C(255, 236, 110), C(255, 176, 30), 255, 36, 92)); }); break; }
+    case 14: {                                                                 /* цветок */
+        static const i32 px[5] = { 64, 91, 81, 47, 37 }, py[5] = { 34, 54, 86, 86, 54 };
+        SHADOWED({ for (int k = 0; k < 5; k++) { shp pt = CI(px[k], py[k], 21); fill(cv, &pt, 0, P(C(255, 170, 200), C(244, 100, 150), 255, py[k] - 21, py[k] + 21)); } });
+        shp c = CI(64, 64, 15); fill(cv, &c, 0, P(C(255, 236, 110), C(250, 180, 30), 255, 49, 79)); break; }
+    }
+}
+
 static void tile_icon(u32 *cv, int kind)
 {
     if (kind == 0) {                                    /* обои: голубая плитка с горами */
@@ -433,65 +560,219 @@ static void tile_icon(u32 *cv, int kind)
     }
 }
 
-/* ---- значки на рабочем столе: папка и документ ---- */
-static void ic_desk_folder(u32 *cv)
+/* ---- значки на рабочем столе: папка, документ, корзина (один материал: градиент, бумага, мягкая тень; тёмная тема - своя палитра) ---- */
+static void ic_desk_folder(u32 *cv, int dark)
 {
+    u32 f0 = dark ? C(10, 160, 240) : C(0, 184, 255), f1 = dark ? C(10, 98, 216) : C(0, 128, 255);
+    u32 b0 = dark ? C(10, 140, 216) : C(0, 170, 245), b1 = dark ? C(10, 90, 190) : C(0, 120, 235);
+    u32 p0 = dark ? C(208, 208, 216) : C(244, 244, 246), p1 = dark ? C(142, 142, 152) : C(200, 200, 204);
     SHADOWED({
-        shp tab = RR(36, 30, 20, 10, 6), back = RR(64, 46, 48, 28, 8);
-        fill(cv, &tab, 0, P(C(120, 190, 255), C(76, 154, 250), 255, 20, 40));
-        fill(cv, &back, 0, P(C(120, 190, 255), C(70, 148, 248), 255, 18, 74));
+        shp back = RR(36, 42, 26, 20, 7), front = RR(64, 75, 54, 36, 7);
+        fill(cv, &back, 0, P(b0, b1, 255, 22, 62));
+        fill(cv, &front, 0, P(f0, f1, 255, 39, 111));
     });
-    shp front = RR(64, 74, 52, 34, 10);
-    fill(cv, &front, 0, P(C(150, 214, 255), C(50, 140, 248), 255, 40, 108));
-    shp fh = STK(RR(64, 74, 52, 34, 10), U);
-    fill(cv, &fh, 0, PA(WHITE, 190, 0, 40, 64));
+    shp paper = RR(63, 47, 48, 15, 7);
+    fill(cv, &paper, 0, P(p0, p1, 255, 33, 62));
+    shp front = RR(64, 75, 54, 36, 7);
+    fill(cv, &front, 0, P(f0, f1, 255, 39, 111));
+    shp fh = STK(RR(64, 75, 54, 36, 7), U);
+    fill(cv, &fh, 0, PA(WHITE, dark ? 90 : 140, 0, 39, 66));
 }
 
-static void ic_desk_file(u32 *cv)
+static void ic_desk_file(u32 *cv, u32 accent, int dark)
 {
+    u32 g0 = dark ? C(88, 92, 104) : C(255, 255, 255), g1 = dark ? C(58, 61, 72) : C(226, 231, 242);
+    u32 e0 = dark ? C(120, 124, 138) : C(206, 212, 226), e1 = dark ? C(84, 88, 100) : C(160, 168, 188);
+    u32 ln = dark ? C(132, 137, 152) : (accent & 0xFFFFFF);
     SHADOWED({
         shp pg = RR(64, 64, 40, 54, 8);
-        fill(cv, &pg, 0, P(C(255, 255, 255), C(222, 227, 238), 255, 10, 118));
+        fill(cv, &pg, 0, P(g0, g1, 255, 10, 118));
     });
     shp edge = STK(RR(64, 64, 40, 54, 8), U);
-    fill(cv, &edge, 0, P(C(200, 205, 220), C(160, 168, 188), 255, 10, 118));
+    fill(cv, &edge, 0, P(e0, e1, 255, 10, 118));
     shp cut1 = ROT(RR(104, 10, 17, 17, 0), 2, 104, 10);
     cut(cv, &cut1, 0);
     shp fold = ROT(RR(88, 26, 12, 12, 3), 2, 88, 26), clip = RR(64, 64, 40, 54, 8);
-    fill(cv, &fold, &clip, P(C(236, 240, 248), C(190, 198, 216), 255, 14, 40));
+    fill(cv, &fold, &clip, P(dark ? C(120, 124, 138) : C(238, 242, 250), dark ? C(84, 88, 100) : C(188, 196, 214), 255, 14, 40));
     static const i32 ly[4] = { 58, 72, 86, 100 };
     for (int i = 0; i < 4; i++) {
         shp l = CA(40, ly[i], i == 3 ? 66 : 88, ly[i], 3);
-        fill(cv, &l, 0, SOLID(C(190, 198, 216)));
+        fill(cv, &l, 0, P(ln, ln, dark ? 255 : 150, 0, S));
     }
 }
 
-static void ic_trash(u32 *cv, int full)
+static void ic_trash(u32 *cv, int full, int dark)
 {
+    u32 b0 = dark ? C(112, 118, 140) : C(222, 229, 241), b1 = dark ? C(70, 75, 94) : C(148, 160, 184);
+    u32 l0 = dark ? C(134, 140, 162) : C(244, 247, 252), l1 = dark ? C(92, 98, 120) : C(176, 187, 206);
+    u32 sl = dark ? C(40, 43, 56) : C(128, 140, 164);
     if (full) {
-        shp p1 = ROT(RR(52, 30, 20, 16, 3), 2, 52, 30), p2 = ROT(RR(76, 28, 20, 18, 3), 1, 76, 28);
-        fill(cv, &p1, 0, P(C(255, 255, 255), C(214, 220, 232), 255, 20, 44));
-        fill(cv, &p2, 0, P(C(250, 252, 255), C(200, 208, 224), 255, 18, 46));
+        shp p1 = ROT(RR(52, 28, 19, 15, 3), 2, 52, 28), p2 = ROT(RR(76, 26, 19, 17, 3), 1, 76, 26);
+        fill(cv, &p1, 0, P(dark ? C(200, 204, 214) : WHITE, dark ? C(150, 154, 168) : C(214, 220, 232), 255, 16, 40));
+        fill(cv, &p2, 0, P(dark ? C(188, 192, 204) : C(250, 252, 255), dark ? C(140, 144, 158) : C(200, 208, 224), 255, 14, 42));
     }
     SHADOWED({
-        shp body = RR(64, 78, 58, 66, 12);
-        fill(cv, &body, 0, P(C(226, 232, 242), C(150, 160, 180), 255, 46, 112));
+        shp body = RR(64, 78, 36, 38, 10);
+        fill(cv, &body, 0, P(b0, b1, 255, 40, 116));
     });
-    shp edge = STK(RR(64, 78, 58, 66, 12), U);
-    fill(cv, &edge, 0, PA(WHITE, 170, 0, 46, 112));
-    shp lid = RR(64, 40, 74, 12, 6), hd = RR(64, 30, 26, 8, 4);
-    fill(cv, &hd, 0, P(C(200, 208, 222), C(150, 160, 180), 255, 24, 38));
-    fill(cv, &lid, 0, P(C(240, 244, 250), C(176, 186, 204), 255, 34, 48));
-    static const i32 sx[3] = { 48, 64, 80 };
+    shp edge = STK(RR(64, 78, 36, 38, 10), U);
+    fill(cv, &edge, 0, PA(WHITE, dark ? 70 : 170, 0, 40, 116));
+    shp hd = RR(64, 24, 14, 6, 3), lid = RR(64, 36, 48, 8, 4);
+    fill(cv, &hd, 0, P(l1, b1, 255, 18, 30));
+    fill(cv, &lid, 0, P(l0, l1, 255, 28, 44));
+    static const i32 sx[3] = { 50, 64, 78 };
     for (int i = 0; i < 3; i++) {
-        shp l = CA(sx[i], 62, sx[i], 100, 3);
-        fill(cv, &l, 0, SOLID(C(150, 160, 180)));
+        shp l = CA(sx[i], 56, sx[i], 100, 3);
+        fill(cv, &l, 0, P(sl, sl, dark ? 255 : 170, 0, S));
     }
+}
+
+/* Тёмная тема для плиток: все цвета на 20% темнее, белые глифы становятся мягко-серыми, как в macOS. */
+static void tone_dark(u32 *cv)
+{
+    for (int i = 0; i < S * S; i++) {
+        u32 p = cv[i];
+        if (!(p >> 24)) continue;
+        u32 r = (p >> 16 & 0xFF) * 205 / 255, g = (p >> 8 & 0xFF) * 205 / 255, b = (p & 0xFF) * 205 / 255;
+        cv[i] = (p & 0xFF000000u) | r << 16 | g << 8 | b;
+    }
+}
+
+int icon_style(void) { return g_style; }
+void icon_set_style(int st) { g_style = st < 0 || st >= ICON_STYLE_COUNT ? 0 : st; }
+
+
+static void ic_calc(u32 *cv)
+{
+    base(cv, C(92, 96, 106), C(30, 32, 38));
+    SHADOWED({
+        shp d = RR(64, 38, 38, 14, 6);
+        fill(cv, &d, 0, P(C(222, 232, 224), C(176, 192, 178), 255, 24, 52));
+    });
+    static const i32 kx[3] = { 38, 64, 90 }, ky[3] = { 66, 86, 106 };
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++) {
+            if (r == 2 && c == 2) continue;
+            shp k = RR(kx[c], ky[r], 10, 7, 3);
+            fill(cv, &k, 0, SOLID(c == 2 ? C(255, 159, 10) : C(176, 180, 190)));
+        }
+    shp eq = RR(90, 106, 10, 7, 3);
+    fill(cv, &eq, 0, SOLID(C(255, 159, 10)));
+}
+
+static void ic_notes(u32 *cv)
+{
+    base(cv, C(255, 232, 120), C(255, 196, 40));
+    SHADOWED({
+        shp pg = RR(64, 70, 38, 44, 7);
+        fill(cv, &pg, 0, P(WHITE, C(238, 240, 246), 255, 26, 114));
+    });
+    shp band = RR(64, 36, 38, 10, 7), clip = RR(64, 70, 38, 44, 7);
+    fill(cv, &band, &clip, SOLID(C(255, 214, 70)));
+    static const i32 ly[4] = { 58, 74, 90, 106 };
+    for (int i = 0; i < 4; i++) {
+        shp l = CA(40, ly[i], i == 3 ? 66 : 88, ly[i], 2);
+        fill(cv, &l, 0, SOLID(C(190, 196, 210)));
+    }
+}
+
+static void ic_clock(u32 *cv)
+{
+    base(cv, C(58, 58, 66), C(16, 16, 20));
+    SHADOWED({
+        shp d = CI(64, 64, 44);
+        fill(cv, &d, 0, P(WHITE, C(226, 228, 236), 255, 20, 108));
+    });
+    static const i32 tx[4] = { 64, 64, 36, 92 }, ty[4] = { 28, 100, 64, 64 };
+    for (int i = 0; i < 4; i++) {
+        shp k = i < 2 ? CA(tx[i], i ? ty[i] - 3 : ty[i] + 3, tx[i], i ? ty[i] + 4 : ty[i] - 4, 1) : CA(i == 2 ? tx[i] - 3 : tx[i] + 3, ty[i], i == 2 ? tx[i] + 4 : tx[i] - 4, ty[i], 1);
+        fill(cv, &k, 0, SOLID(C(120, 124, 138)));
+    }
+    shp h1 = CA(64, 64, 64, 42, 3), h2 = CA(64, 64, 80, 72, 3), sc = CA(64, 76, 64, 34, 1), dot = CI(64, 64, 4);
+    fill(cv, &h1, 0, SOLID(C(30, 30, 36)));
+    fill(cv, &h2, 0, SOLID(C(30, 30, 36)));
+    fill(cv, &sc, 0, SOLID(C(255, 149, 0)));
+    fill(cv, &dot, 0, SOLID(C(255, 149, 0)));
+}
+
+/* Календарь показывает настоящую дату: цифры рисуются штрихами, точки в шапке - дни недели (сегодняшний крупнее). */
+static i32 g_day = 1, g_wday = 0;                              /* день месяца и день недели (пн = 0) */
+
+static void poly(u32 *cv, const i32 *pt, int n, i32 x0, i32 y0, i32 w, i32 h, i32 r, u32 c, int flip)
+{
+    for (int i = 0; i + 1 < n; i++) {
+        i32 ax = pt[2 * i], ay = pt[2 * i + 1], bx = pt[2 * i + 2], by = pt[2 * i + 3];
+        if (flip) { ax = 100 - ax; ay = 100 - ay; bx = 100 - bx; by = 100 - by; }
+        shp s = CA(x0 + ax * w / 100, y0 + ay * h / 100, x0 + bx * w / 100, y0 + by * h / 100, r);
+        fill(cv, &s, 0, SOLID(c));
+    }
+}
+
+static void digit(u32 *cv, int d, i32 x0, i32 y0, i32 w, i32 h, i32 r, u32 c)
+{
+    static const i32 d1[] = { 25, 22, 55, 0, 55, 100 };
+    static const i32 d2[] = { 5, 25, 18, 6, 50, 0, 82, 6, 95, 28, 80, 52, 5, 100, 98, 100 };
+    static const i32 d3a[] = { 8, 10, 45, 0, 85, 10, 95, 30, 72, 47, 40, 50 }, d3b[] = { 72, 49, 98, 70, 88, 92, 50, 100, 5, 90 };
+    static const i32 d4[] = { 72, 100, 72, 0, 0, 70, 100, 70 };
+    static const i32 d5[] = { 90, 0, 15, 0, 10, 45, 50, 38, 88, 55, 95, 78, 70, 98, 45, 100, 5, 90 };
+    static const i32 d6[] = { 85, 5, 50, 0, 15, 20, 5, 60, 20, 95, 50, 100, 85, 90, 95, 68, 80, 48, 50, 42, 15, 58 };
+    static const i32 d7[] = { 0, 0, 100, 0, 40, 100 };
+    i32 cx = x0 + w / 2, rr = r;
+    switch (d) {
+    case 0: { shp o = STK(RR(cx, y0 + h / 2, w / 2 + r, h / 2 + r, w / 2 + r), 2 * r * U); fill(cv, &o, 0, SOLID(c)); break; }
+    case 1: poly(cv, d1, 3, x0, y0, w, h, rr, c, 0); break;
+    case 2: poly(cv, d2, 8, x0, y0, w, h, rr, c, 0); break;
+    case 3: poly(cv, d3a, 6, x0, y0, w, h, rr, c, 0); poly(cv, d3b, 5, x0, y0, w, h, rr, c, 0); break;
+    case 4: poly(cv, d4, 4, x0, y0, w, h, rr, c, 0); break;
+    case 5: poly(cv, d5, 9, x0, y0, w, h, rr, c, 0); break;
+    case 6: poly(cv, d6, 11, x0, y0, w, h, rr, c, 0); break;
+    case 7: poly(cv, d7, 3, x0, y0, w, h, rr, c, 0); break;
+    case 8: {
+        i32 th = h * 46 / 100, bh = h * 54 / 100;
+        shp a = STK(RR(cx, y0 + th / 2, w * 42 / 100 + r, th / 2 + r, w * 42 / 100 + r), 2 * r * U);
+        shp b = STK(RR(cx, y0 + h - bh / 2, w / 2 + r, bh / 2 + r, w / 2 + r), 2 * r * U);
+        fill(cv, &a, 0, SOLID(c)); fill(cv, &b, 0, SOLID(c)); break; }
+    default: poly(cv, d6, 11, x0, y0, w, h, rr, c, 1); break;                /* 9 = перевёрнутая 6 */
+    }
+}
+
+static void ic_calendar(u32 *cv)
+{
+    base(cv, C(255, 255, 255), C(232, 234, 240));
+    shp band = RR(64, 34, 52, 16, 8), clip = RR(64, 64, 52, 52, 14);
+    fill(cv, &band, &clip, P(C(255, 98, 84), C(236, 52, 62), 255, 18, 50));
+    shp top = RR(64, 40, 52, 6, 0);
+    fill(cv, &top, &clip, P(C(240, 62, 66), C(236, 52, 62), 255, 34, 46));
+    for (int k = 0; k < 7; k++) {
+        shp dot = CI(28 + k * 12, 33, k == g_wday ? 5 : 3);
+        fill(cv, &dot, 0, PA(WHITE, k == g_wday ? 255 : 120, k == g_wday ? 255 : 120, 0, S));
+    }
+    u32 ink = C(38, 38, 46);
+    i32 d = g_day < 1 ? 1 : g_day > 31 ? 31 : g_day, h = 46, t = 4;
+    if (d < 10) digit(cv, d, 64 - 14, 58, 28, h, t, ink);
+    else { digit(cv, d / 10, 64 - 33, 58, 26, h, t, ink); digit(cv, d % 10, 64 + 7, 58, 26, h, t, ink); }
+}
+
+static void ic_music(u32 *cv)
+{
+    base(cv, C(255, 94, 120), C(220, 30, 80));
+    shp h1 = CI(50, 92, 14), h2 = CI(88, 84, 14), s1 = CA(61, 92, 61, 44, 3), s2 = CA(99, 84, 99, 36, 3), bm = CA(61, 44, 99, 36, 5);
+    SHADOWED({
+        fill(cv, &h1, 0, SOLID(C(255, 255, 255)));
+        fill(cv, &h2, 0, SOLID(C(255, 255, 255)));
+        fill(cv, &s1, 0, SOLID(C(255, 255, 255)));
+        fill(cv, &s2, 0, SOLID(C(255, 255, 255)));
+        fill(cv, &bm, 0, SOLID(C(255, 255, 255)));
+    });
 }
 
 void icon_render(int id, u32 *cv, u32 accent, int dark)
 {
     for (int i = 0; i < S * S; i++) cv[i] = 0;
+    int is_tile = id <= ICON_LAUNCHPAD || (id >= ICON_TILE_WALL && id <= ICON_TILE_GLASS) || id == ICON_APP_CALC || id == ICON_APP_NOTES || id == ICON_APP_CLOCK || id == ICON_APP_CAL || id == ICON_APP_MUSIC;
+    g_accent = accent & 0xFFFFFF;
+    g_tone = is_tile && g_style >= ICON_STYLE_MONO ? g_style : 0;
+    int sty = g_style; if (!is_tile) g_style = 0;                /* значки рабочего стола и панелей не меняют стиль */
     switch (id) {
     case 0: ic_files(cv); break;
     case 1: ic_terminal(cv); break;
@@ -500,17 +781,25 @@ void icon_render(int id, u32 *cv, u32 accent, int dark)
     case 4: ic_about(cv, accent, dark); break;
     case 5: ic_browser(cv); break;
     case 6: ic_launchpad(cv); break;
+    case ICON_APP_CALC: ic_calc(cv); break;
+    case ICON_APP_NOTES: ic_notes(cv); break;
+    case ICON_APP_CLOCK: ic_clock(cv); break;
+    case ICON_APP_CAL: ic_calendar(cv); break;
+    case ICON_APP_MUSIC: ic_music(cv); break;
     case ICON_TILE_WALL: tile_icon(cv, 0); break;
     case ICON_TILE_APPEAR: tile_icon(cv, 1); break;
     case ICON_TILE_GLASS: tile_icon(cv, 2); break;
-    case ICON_DESK_FOLDER: ic_desk_folder(cv); break;
-    case ICON_DESK_FILE: ic_desk_file(cv); break;
-    case ICON_TRASH: ic_trash(cv, 0); break;
-    case ICON_TRASH_FULL: ic_trash(cv, 1); break;
+    case ICON_DESK_FOLDER: ic_desk_folder(cv, dark); break;
+    case ICON_DESK_FILE: ic_desk_file(cv, accent, dark); break;
+    case ICON_TRASH: ic_trash(cv, 0, dark); break;
+    case ICON_TRASH_FULL: ic_trash(cv, 1, dark); break;
     default:
+        if (id >= ICON_EMOJI0) { ic_emoji(cv, id - ICON_EMOJI0); break; }
         if (id >= ICON_SIDE_HOME && id <= ICON_SIDE_DISK) glyph(cv, id - ICON_SIDE_HOME, accent & 0xFFFFFF);
         break;
     }
+    g_style = sty; g_tone = 0;
+    if (dark && id != 4 && is_tile && g_style < ICON_STYLE_MONO) tone_dark(cv);
 }
 
 /* ---------- кэш и масштабирование ---------- */
@@ -522,6 +811,14 @@ static u32 pm0[ICON_COUNT][S * S];  static u8 al0[ICON_COUNT][S * S];      /* 12
 static u32 pm1[ICON_COUNT][M1 * M1]; static u8 al1[ICON_COUNT][M1 * M1];   /* 64 */
 static u32 pm2[ICON_COUNT][M2 * M2]; static u8 al2[ICON_COUNT][M2 * M2];   /* 32 */
 static int cache_key = -1;
+static u8 built[ICON_COUNT];
+
+void icon_set_date(int day, int wday)                  /* вызывает wm при смене даты: значок Calendar перерисуется */
+{
+    if (day == g_day && wday == g_wday) return;
+    g_day = day; g_wday = wday;
+    built[ICON_APP_CAL] = 0;
+}
 
 static void half(const u32 *pm, const u8 *al, int n, u32 *opm, u8 *oal)    /* n -> n/2, усреднение 2x2 */
 {
@@ -539,19 +836,18 @@ static void half(const u32 *pm, const u8 *al, int n, u32 *opm, u8 *oal)    /* n 
         }
 }
 
-static void cache_build(void)
+static void cache_build(int a)                          /* значок строится при первом показе: смена темы не пересчитывает все сразу */
 {
     static u32 cv[S * S];
-    for (int a = 0; a < ICON_COUNT; a++) {
-        icon_render(a, cv, theme_accent(), theme_is_dark());
-        for (int k = 0; k < S * S; k++) {
-            u32 p = cv[k], al = p >> 24;
-            pm0[a][k] = ((p >> 16 & 0xFF) * al / 255 << 16) | ((p >> 8 & 0xFF) * al / 255 << 8) | (p & 0xFF) * al / 255;
-            al0[a][k] = (u8)al;
-        }
-        half(pm0[a], al0[a], S, pm1[a], al1[a]);
-        half(pm1[a], al1[a], M1, pm2[a], al2[a]);
+    icon_render(a, cv, theme_accent(), theme_is_dark());
+    for (int k = 0; k < S * S; k++) {
+        u32 p = cv[k], al = p >> 24;
+        pm0[a][k] = ((p >> 16 & 0xFF) * al / 255 << 16) | ((p >> 8 & 0xFF) * al / 255 << 8) | (p & 0xFF) * al / 255;
+        al0[a][k] = (u8)al;
     }
+    half(pm0[a], al0[a], S, pm1[a], al1[a]);
+    half(pm1[a], al1[a], M1, pm2[a], al2[a]);
+    built[a] = 1;
 }
 
 static u32 bil(const u32 *pm, const u8 *al, int n, i32 fx, i32 fy, int alpha_plane)
@@ -578,11 +874,12 @@ static u32 bil(const u32 *pm, const u8 *al, int n, i32 fx, i32 fy, int alpha_pla
 void icon_draw(int id, i32 x, i32 y, i32 size)
 {
     if (size < 2 || id < 0 || id >= ICON_COUNT) return;
-    int key = (theme_is_dark() ? 16 : 0) + theme_accent_index();
+    int key = g_style * 64 + (theme_is_dark() ? 16 : 0) + theme_accent_index();
     if (key != cache_key) {
-        cache_build();
+        for (int i = 0; i < ICON_COUNT; i++) built[i] = 0;
         cache_key = key;
     }
+    if (!built[id]) cache_build(id);
     int n = size > 72 ? S : size > 36 ? M1 : M2;
     const u32 *pm = n == S ? pm0[id] : n == M1 ? pm1[id] : pm2[id];
     const u8 *al = n == S ? al0[id] : n == M1 ? al1[id] : al2[id];

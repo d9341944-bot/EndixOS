@@ -20,7 +20,12 @@ void files_draw(i32 x, i32 y);
 int  files_click(i32 rx, i32 ry, u32 ticks);
 
 /* Клавиша: стрелки, Enter (открыть), F2 (переименовать), Delete, Backspace (наверх). */
-int  files_key(i32 key);
+int  files_key(i32 key, int ctrl);                 /* Ctrl+C / X / V / D - копировать, вырезать, вставить, дублировать */
+int  files_rclick(i32 rx, i32 ry);                 /* правая кнопка: контекстное меню */
+int  files_hover(i32 rx, i32 ry);                  /* подсветка пункта меню; 1 - перерисовать */
+int  files_menu_is_open(void);
+void files_menu_close(void);
+void wm_open_file(int node);                       /* реализует wm.c: открыть файл в своём окне */
 int  files_wheel(i32 d);                           /* колесо мыши: d > 0 вверх; 1 - содержимое сдвинулось */
 
 #endif

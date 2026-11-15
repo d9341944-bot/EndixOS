@@ -5,6 +5,8 @@
 #include "ui.h"
 #include "font.h"
 #include "theme.h"
+#include "viewer.h"
+#include "notes.h"
 #include "../kernel/fs.h"
 #include "../kernel/event.h"
 
@@ -131,9 +133,11 @@ static const char *kind_of(int node)
     int l = 0;
     while (n[l])
         l++;
+    if (viewer_is_image(node))
+        return "Image";
     if (l > 4 && n[l - 4] == '.' && n[l - 3] == 't' && n[l - 2] == 'x' && n[l - 1] == 't')
         return "Text document";
-    return "Document";
+    return te_is_text(node) ? "Text file" : "Document";
 }
 
 /* ---------- геометрия ---------- */
@@ -302,6 +306,196 @@ static void rename_end(int commit)
 }
 
 /* ---------- действия ---------- */
+
+__attribute__((weak)) void wm_open_file(int node) { (void)node; }
+static void make_new(int is_dir);
+static void delete_selected(void);
+static int grid_item_at(i32 rx, i32 ry);
+
+static void open_node(int node)
+{
+    if (node < 0 || !fs_valid(node)) return;
+    if (fs_is_dir(node)) go(node);
+    else wm_open_file(node);
+}
+
+static int clip = -1, clip_cut;                         /* буфер обмена: узел и признак "вырезать" */
+static int clip_ok(void) { return clip >= 0 && fs_valid(clip) && clip != fs_root(); }
+
+static int inside(int node, int dir)                    /* dir лежит внутри node (или это он сам) */
+{
+    for (int n = dir; n >= 0; n = fs_parent(n))
+        if (n == node) return 1;
+    return 0;
+}
+
+static int copy_tree(int src, int dst_dir, const char *name)
+{
+    static u8 cb[FS_FILE_MAX];
+    if (fs_is_dir(src)) {
+        int id = fs_mkdir(dst_dir, name);
+        if (id < 0) return -1;
+        int list[FS_MAX_NODES], n = fs_list(src, list, FS_MAX_NODES);
+        for (int i = 0; i < n; i++) {
+            char nm[FS_NAME_MAX];
+            const char *cn = fs_name(list[i]);
+            int k = 0;
+            while (cn[k] && k < FS_NAME_MAX - 1) { nm[k] = cn[k]; k++; }
+            nm[k] = 0;
+            if (copy_tree(list[i], id, nm) < 0) return -1;
+        }
+        return id;
+    }
+    u32 sz = fs_size(src);
+    const u8 *d = fs_data(src);
+    for (u32 i = 0; i < sz; i++) cb[i] = d[i];
+    int id = fs_create(dst_dir, name);
+    if (id < 0) return -1;
+    if (sz && fs_write(id, (const char *)cb, sz, 0) < 0) { fs_remove(id); return -1; }
+    return id;
+}
+
+static void unique_copy(int src, char *out)             /* свободное имя в текущей папке для src */
+{
+    char base[FS_NAME_MAX];
+    const char *n = fs_name(src);
+    int k = 0;
+    while (n[k] && k < FS_NAME_MAX - 1) { base[k] = n[k]; k++; }
+    base[k] = 0;
+    fs_unique_name(cur, base, out);
+}
+
+static void do_copy(int cut)
+{
+    rename_end(1);
+    if (sel < 0 || !fs_valid(sel)) return;
+    clip = sel; clip_cut = cut;
+    set_msg(cut ? "Cut - choose a folder and paste" : "Copied");
+}
+
+static void do_paste(void)
+{
+    rename_end(1);
+    if (!clip_ok()) { set_msg("Nothing to paste"); return; }
+    if (inside(clip, cur) && fs_is_dir(clip)) { set_msg("Cannot paste a folder into itself"); return; }
+    char nm[FS_NAME_MAX];
+    int id;
+    if (clip_cut) {
+        if (fs_parent(clip) == cur) { clip = -1; return; }
+        unique_copy(clip, nm);
+        id = fs_move(clip, cur, nm) == 0 ? clip : -1;
+        clip = -1;
+    } else {
+        unique_copy(clip, nm);
+        id = copy_tree(clip, cur, nm);
+    }
+    refresh();
+    if (id < 0) { set_msg("Not enough space"); return; }
+    sel = id;
+    ensure_visible();
+    set_msg("Pasted");
+}
+
+static void do_duplicate(void)
+{
+    rename_end(1);
+    if (sel < 0 || !fs_valid(sel)) return;
+    char nm[FS_NAME_MAX];
+    unique_copy(sel, nm);
+    int id = copy_tree(sel, cur, nm);
+    refresh();
+    if (id < 0) { set_msg("Not enough space"); return; }
+    sel = id;
+    ensure_visible();
+    set_msg("Duplicated");
+}
+
+/* ---------- контекстное меню (правая кнопка) ---------- */
+
+enum { FM_OPEN, FM_RENAME, FM_DUP, FM_COPY, FM_CUT, FM_PASTE, FM_TRASH, FM_NFOLDER, FM_NFILE, FM_COUNT };
+static const char *const fm_label[FM_COUNT] = { "Open", "Rename", "Duplicate", "Copy", "Cut", "Paste", "Move to Trash", "New Folder", "New File" };
+#define FM_W 156
+#define FM_ROW 24
+static int fm_on, fm_x, fm_y, fm_n, fm_id[FM_COUNT], fm_hover = -1;
+
+static i32 fm_h(void) { return fm_n * FM_ROW + 10; }
+
+int files_menu_is_open(void) { return fm_on; }
+void files_menu_close(void) { fm_on = 0; fm_hover = -1; }
+
+int files_rclick(i32 rx, i32 ry)
+{
+    refresh();
+    rename_end(1);
+    if (rx < SIDE_W || rx >= fw_ - PREV_W || ry < TOOL_H + ACT_H || ry >= fh_ - STATUS_H) { fm_on = 0; return 1; }
+    int node = grid_item_at(rx, ry);
+    fm_n = 0;
+    if (node >= 0) {
+        sel = node;
+        fm_id[fm_n++] = FM_OPEN; fm_id[fm_n++] = FM_RENAME; fm_id[fm_n++] = FM_DUP;
+        fm_id[fm_n++] = FM_COPY; fm_id[fm_n++] = FM_CUT;
+        if (clip_ok()) fm_id[fm_n++] = FM_PASTE;
+        fm_id[fm_n++] = FM_TRASH;
+    } else {
+        sel = -1;
+        fm_id[fm_n++] = FM_NFOLDER; fm_id[fm_n++] = FM_NFILE;
+        if (clip_ok()) fm_id[fm_n++] = FM_PASTE;
+    }
+    fm_x = rx; fm_y = ry;
+    if (fm_x + FM_W > fw_ - 4) fm_x = fw_ - 4 - FM_W;
+    if (fm_y + fm_h() > fh_ - 4) fm_y = fh_ - 4 - fm_h();
+    if (fm_y < 2) fm_y = 2;
+    fm_on = 1; fm_hover = -1; msg[0] = 0;
+    return 1;
+}
+
+static int fm_item_at(i32 rx, i32 ry)
+{
+    if (!fm_on || rx < fm_x || rx >= fm_x + FM_W || ry < fm_y + 5 || ry >= fm_y + 5 + fm_n * FM_ROW) return -1;
+    return (ry - fm_y - 5) / FM_ROW;
+}
+
+int files_hover(i32 rx, i32 ry)
+{
+    if (!fm_on) return 0;
+    int h = fm_item_at(rx, ry);
+    if (h == fm_hover) return 0;
+    fm_hover = h;
+    return 1;
+}
+
+static void fm_run(int id)
+{
+    switch (id) {
+    case FM_OPEN: open_node(sel); break;
+    case FM_RENAME: rename_begin(); break;
+    case FM_DUP: do_duplicate(); break;
+    case FM_COPY: do_copy(0); break;
+    case FM_CUT: do_copy(1); break;
+    case FM_PASTE: do_paste(); break;
+    case FM_TRASH: delete_selected(); break;
+    case FM_NFOLDER: make_new(1); break;
+    case FM_NFILE: make_new(0); break;
+    }
+}
+
+static void draw_menu(i32 x, i32 y)
+{
+    if (!fm_on) return;
+    const theme_t *t = theme();
+    int dark = theme_is_dark();
+    i32 mx = x + fm_x, my = y + fm_y, mh = fm_h();
+    fb_shadow(mx, my, FM_W, mh, 6, 8, 90);
+    fb_fill_round_rect(mx, my, FM_W, mh, 10, dark ? RGB(52, 52, 58) : RGB(250, 250, 252), 255);
+    fb_blend_rect(mx + 10, my, FM_W - 20, 1, RGB(255, 255, 255), dark ? 40 : 200);
+    for (int i = 0; i < fm_n; i++) {
+        i32 ry = my + 5 + i * FM_ROW;
+        int hv = i == fm_hover;
+        if (fm_id[i] == FM_TRASH || fm_id[i] == FM_NFOLDER) fb_blend_rect(mx + 12, ry - (fm_id[i] == FM_TRASH ? 1 : 0), FM_W - 24, 1, RGB(0, 0, 0), t->line_alpha);
+        if (hv) fb_fill_round_rect(mx + 4, ry, FM_W - 8, FM_ROW - 2, 6, theme_accent(), 255);
+        font_draw(mx + 14, ry + 4, fm_label[fm_id[i]], hv ? RGB(255, 255, 255) : t->text, FONT_REGULAR);
+    }
+}
 
 static void make_new(int is_dir)
 {
@@ -559,7 +753,9 @@ static void draw_preview(i32 x, i32 y)
     }
     font_draw(px + (PREV_W - font_width(buf, FONT_REGULAR)) / 2, y + 128, buf, t->sub, FONT_REGULAR);
 
-    if (!is_dir) {                                   /* начало текста файла */
+    if (!is_dir && viewer_is_image(node)) {
+        font_draw(px + (PREV_W - font_width("Double-click to open", FONT_REGULAR)) / 2, y + 160, "Double-click to open", t->sub, FONT_REGULAR);
+    } else if (!is_dir) {                            /* начало текста файла */
         const u8 *d = fs_data(node);
         u32 sz = fs_size(node), i;
         int line = 0, col = 0;
@@ -598,6 +794,7 @@ void files_draw(i32 x, i32 y)
     draw_toolbar(x, y);
     draw_grid(x, y);
     draw_status(x, y);
+    draw_menu(x, y);
 }
 
 /* ---------- ввод ---------- */
@@ -640,6 +837,13 @@ static int grid_item_at(i32 rx, i32 ry)
 int files_click(i32 rx, i32 ry, u32 ticks)
 {
     refresh();
+    if (fm_on) {                                         /* контекстное меню: пункт или клик мимо */
+        int it = fm_item_at(rx, ry);
+        int id = it >= 0 ? fm_id[it] : -1;
+        fm_on = 0; fm_hover = -1;
+        if (id >= 0) fm_run(id);
+        return 1;
+    }
 
     if (rx < SIDE_W) {                                   /* боковая панель */
         for (int i = 0; i < NSIDE; i++) {
@@ -695,8 +899,7 @@ int files_click(i32 rx, i32 ry, u32 ticks)
         last_node = -2;
         sel = node;
         msg[0] = 0;
-        if (fs_is_dir(node))
-            go(node);                                    /* двойной клик по папке открывает её */
+        open_node(node);                                 /* двойной клик: папка открывается, картинка и текст - в своём окне */
         return 1;
     }
     last_node = node;
@@ -706,9 +909,19 @@ int files_click(i32 rx, i32 ry, u32 ticks)
     return 1;
 }
 
-int files_key(i32 key)
+int files_key(i32 key, int ctrl)
 {
     refresh();
+    if (fm_on) { fm_on = 0; fm_hover = -1; if (key == 27) return 1; }
+    if (ctrl && !renaming) {
+        switch (key) {
+        case 'c': case 'C': case 3:  do_copy(0); return 1;
+        case 'x': case 'X': case 24: do_copy(1); return 1;
+        case 'v': case 'V': case 22: do_paste(); return 1;
+        case 'd': case 'D': case 4:  do_duplicate(); return 1;
+        default: return 0;
+        }
+    }
 
     if (renaming) {
         if (key == 27) {
@@ -746,8 +959,7 @@ int files_key(i32 key)
     case KEY_UP:    select_index(idx < 0 ? 0 : idx - cols); return 1;
     case KEY_DOWN:  select_index(idx < 0 ? 0 : idx + cols); return 1;
     case '\n':
-        if (sel >= 0 && fs_is_dir(sel))
-            go(sel);
+        open_node(sel);
         return 1;
     case '\b':
         if (fs_parent(cur) >= 0)

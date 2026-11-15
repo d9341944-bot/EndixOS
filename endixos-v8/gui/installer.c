@@ -1,4 +1,5 @@
 #include "installer.h"
+#include "../drivers/rtlwifi.h"
 #include "fb.h"
 #include "font.h"
 #include "theme.h"
@@ -238,7 +239,7 @@ static void on_progress(int pct, const char *step)
     fb_flip();
 }
 
-static char cfgbuf[1400];
+static char cfgbuf[2600];
 static int  cfgn;
 static void cadd(const char *s) { while (*s && cfgn < (int)sizeof cfgbuf - 1) cfgbuf[cfgn++] = *s++; cfgbuf[cfgn] = 0; }
 static void cnum(u32 v) { char t[12]; int n = 0; do { t[n++] = (char)('0' + v % 10); v /= 10; } while (v); while (n) { char c[2] = { t[--n], 0 }; cadd(c); } }
@@ -247,12 +248,12 @@ static void centry(const char *name, u32 w, u32 h, int wide)
     cadd("menuentry \""); cadd(name); cadd("\" {\n    set gfxpayload="); cnum(w); cadd("x"); cnum(h); cadd("x32\n    multiboot /boot/endixos.elf");
     if (wide) cadd(" wide");
     cadd(" installed");
-    cadd("\n    module /boot/endixos.elf endixos.elf\n    boot\n}\n");
+    cadd("\n    module /boot/endixos.elf endixos.elf\n    if [ -f /boot/rtl8192c.bin ]; then module /boot/rtl8192c.bin rtl8192cfw.bin; fi\n    boot\n}\n");
 }
 static void make_cfg(void)
 {
     cfgn = 0; cfgbuf[0] = 0;
-    cadd("insmod all_video\ninsmod vbe\ninsmod vga\ninsmod multiboot\nset gfxmode=auto\nset timeout=2\nset default=0\n\n");
+    cadd("insmod all_video\ninsmod vbe\ninsmod vga\ninsmod multiboot\nset gfxmode=auto\nset timeout=1\nset timeout_style=hidden\nset default=0\n\n");
     u32 pw = fb_phys_width(), ph = fb_height();
     int wide = pw != fb_width();
     centry(wide ? "EndixOS (current screen mode, widescreen)" : "EndixOS", pw, ph, wide);
@@ -270,7 +271,8 @@ static void run_install(void)
     if (!k || !klen) { errmsg = "The kernel image is not available. Start EndixOS from GRUB (the menu entry must have a 'module' line)."; goto fail; }
     d.rd = dk_rd; d.wr = dk_wr; d.ctx = (void *)(long)disk_sel; d.sectors = dk->sectors;
     make_cfg();
-    inst_params_t p = { k, klen, cfgbuf, fld[F_USER].s, fld[F_NAME].s, fld[F_PASS].s, fld[F_HOST].s };
+    u32 fwlen = 0; const u8 *fw = rtlwifi_blob(&fwlen);
+    inst_params_t p = { k, klen, cfgbuf, fld[F_USER].s, fld[F_NAME].s, fld[F_PASS].s, fld[F_HOST].s, fw, fwlen };
     if (inst_check_params(&p, &err)) { errmsg = err; goto fail; }
     prog = 0; prog_shown = 0;
     int r = inst_run(&d, &p, on_progress, &msg);

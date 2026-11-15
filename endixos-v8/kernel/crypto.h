@@ -28,4 +28,12 @@ void x25519_base(u8 out[32], const u8 scalar[32]);
 void rng_mix(u32 v);
 void rng_fill(u8 *out, u32 n);
 
+/* WPA2-PSK */
+void hmac_sha1(const u8 *key, u32 kl, const u8 *msg, u32 ml, u8 out[20]);
+void pbkdf2_sha1(const u8 *pass, u32 pl, const u8 *salt, u32 sl, u32 iter, u8 *out, u32 olen);
+void wpa_prf(const u8 *key, u32 kl, const char *label, const u8 *data, u32 dl, u8 *out, u32 olen);
+int  aes_key_unwrap(const u8 kek[16], const u8 *in, u32 n, u8 *out);          /* in: n*8 байт, out: (n-1)*8; 1 - целостность верна */
+void ccmp_seal(const u8 key[16], const u8 nonce[13], const u8 *aad, u32 al, const u8 *in, u32 n, u8 *out, u8 mic[8]);
+int  ccmp_open(const u8 key[16], const u8 nonce[13], const u8 *aad, u32 al, const u8 *in, u32 n, u8 *out, const u8 mic[8]);   /* 1 - тег верный */
+
 #endif

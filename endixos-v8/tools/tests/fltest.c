@@ -25,7 +25,7 @@ int main(void)
     int g0 = grid_y(); i32 ry = g0 + 2 * ROW_H + 5;
     click(ox + SIDE_W + 60, oy + ry); CHECK(sel >= 0 && sel == items[2], "клик по строке выбирает третий элемент");
 
-    files_key(KEY_DOWN); CHECK(sel == items[3], "стрелка вниз");
+    files_key(KEY_DOWN, 0); CHECK(sel == items[3], "стрелка вниз");
     click(ox + VIEW_X + 12, oy + 18); CHECK(listv == 0, "обратно значки");
     click(ox + 20, oy + 34 + 7 * 30 + 28 + 6); CHECK(cur == fs_trash(), "боковая панель: Trash");
     shot("trash");

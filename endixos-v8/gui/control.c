@@ -443,7 +443,10 @@ static void draw_tile(int id, i32 x, i32 y, i32 w, i32 h)
     const theme_t *t = theme();
     int on = is_on(id);
     int round = CT[id].w == 1 && CT[id].h == 1;
-    fb_glass(x, y, w, h, round ? CELL / 2 : 20, GLASS_ALL, 0, tile_col(), theme_is_dark() ? 112 : 160, 26);
+    i32 rr = round ? CELL / 2 : 20;
+    for (int k = 0; k < 4; k++)                         /* лёгкая тень: без общего фона плитка должна отделяться от обоев */
+        fb_fill_round_rect(x - k + 1, y - k + 4, w + 2 * k - 2, h + 2 * k - 2, rr + k, RGB(0, 0, 0), 7);
+    fb_glass(x, y, w, h, rr, GLASS_ALL, 10, tile_col(), theme_is_dark() ? 150 : 178, 30);
     switch (CT[id].kind) {
     case K_SLIDER:
         font_draw(x + 14, y + 8, CT[id].name, t->text, FONT_BOLD);
@@ -506,10 +509,12 @@ void cc_draw_any(i32 W)                                 /* рисует пане
     init_once();
     i32 x = px(W), y = PY, ph = cur_h();
 
-    for (int k = 0; k < 6; k++)                         /* мягкая тень */
-        fb_fill_round_rect(x - k, y - k + 5, PW + 2 * k, ph + 2 * k, 24 + k, RGB(0, 0, 0), 9);
-    fb_glass(x, y, PW, ph, 30, GLASS_ALL, 14, theme_is_dark() ? RGB(36, 36, 42) : RGB(238, 238, 243),
-             theme_is_dark() ? 118 : 112, 44);
+    if (mode == 2) {                                    /* общий фон только у галереи; на главной панели плитки парят сами, как в macOS 26 */
+        for (int k = 0; k < 6; k++)                     /* мягкая тень */
+            fb_fill_round_rect(x - k, y - k + 5, PW + 2 * k, ph + 2 * k, 24 + k, RGB(0, 0, 0), 9);
+        fb_glass(x, y, PW, ph, 30, GLASS_ALL, 14, theme_is_dark() ? RGB(36, 36, 42) : RGB(238, 238, 243),
+                 theme_is_dark() ? 118 : 112, 44);
+    }
 
     if (mode == 2) {                                    /* галерея: что можно добавить */
         i32 gx = x + PADX, gy = y + PADX;

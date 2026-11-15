@@ -518,6 +518,6 @@ void fs_init(void)
         "[ ] Launchpad\n"
         "[ ] real disk\n");
     put_file(desktop, "Install EndixOS", "#install\n");        /* значок установщика (рисуется особо, открывает установщик) */
-    put_file(etc, "os-release", "NAME=EndixOS\nVERSION=8.0\nARCH=i686\n");
+    put_file(etc, "os-release", "NAME=EndixOS\nVERSION=8.2\nARCH=i686\n");
     put_file(etc, "hostname", "endix\n");
 }

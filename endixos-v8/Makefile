@@ -11,7 +11,7 @@ AS      := nasm -f elf32
 LD      := ld -m elf_i386
 CFLAGS  := -std=gnu11 -O2 -Wall -Wextra -ffreestanding -fno-pic -fno-pie \
            -fno-stack-protector -fno-builtin -fno-tree-loop-distribute-patterns \
-           -mgeneral-regs-only -nostdlib
+           -mgeneral-regs-only -nostdlib -MMD -MP
 LDFLAGS := -T linker.ld -nostdlib -z noexecstack
 
 BUILD  := build
@@ -30,7 +30,7 @@ QEMU      := qemu-system-i386
 QEMU_OPTS := -m 128 -serial stdio -rtc base=localtime \
              -nic user,model=e1000 -device intel-hda -device hda-duplex -display gtk,grab-on-hover=on -accel kvm -accel tcg
 
-.PHONY: all run run-install run-installed iso usb usb-iso check clean
+.PHONY: all run run-install run-installed iso usb usb-refresh usb-iso check clean
 
 all: $(KERNEL)
 
@@ -82,28 +82,15 @@ iso: $(KERNEL)
 	cp grub.cfg $(BUILD)/iso/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) $(BUILD)/iso
 
-# Загрузочная флешка:  make usb DEV=/dev/sdX   (стирает ВСЮ флешку; проверь имя через lsblk!)
-# Делает обычную флешку: таблица MBR, активный раздел FAT32, GRUB записан в MBR. Так грузятся даже старые BIOS (Phoenix и т. п.),
-# которые не принимают гибридный ISO. Нужны: parted, dosfstools, grub.
-usb: $(KERNEL)
-	@test -n "$(DEV)" || { echo "Укажи флешку: make usb DEV=/dev/sdX  (список: lsblk)"; exit 1; }
-	@test -b "$(DEV)" || { echo "$(DEV) не блочное устройство"; exit 1; }
-	@case "$(DEV)" in *[0-9]) echo "Нужен диск целиком (например /dev/sdb), а не раздел $(DEV)"; exit 1;; esac
-	@test "$$(cat /sys/block/$$(basename $(DEV))/removable 2>/dev/null)" = 1 || { echo "$(DEV) не съёмное устройство - отказываюсь писать (защита системного диска)"; exit 1; }
-	@for t in parted mkfs.fat grub-install; do command -v $$t >/dev/null || { echo "Не хватает '$$t'. На Arch/CachyOS: sudo pacman -S parted dosfstools grub"; exit 1; }; done
-	-sudo umount $(DEV)* 2>/dev/null
-	sudo wipefs -a $(DEV)
-	sudo parted -s $(DEV) mklabel msdos mkpart primary fat32 1MiB 100% set 1 boot on
-	sudo partprobe $(DEV); sleep 2
-	sudo mkfs.fat -F32 $(DEV)1
-	@m=$$(mktemp -d) && \
-	sudo mount $(DEV)1 $$m && \
-	sudo mkdir -p $$m/boot/grub && \
-	sudo cp $(KERNEL) $$m/boot/endixos.elf && \
-	sudo cp grub.cfg $$m/boot/grub/grub.cfg && \
-	sudo grub-install --target=i386-pc --boot-directory=$$m/boot --modules="part_msdos fat" $(DEV) && \
-	sync && sudo umount $$m && rmdir $$m
-	@echo "Готово: загрузись с флешки (USB HDD в BIOS)."
+# Загрузочная флешка (подробности и проверки - в tools/mkusb.sh):
+#   make usb                   выбрать флешку и записать с нуля (стирает её!)
+#   make usb DEV=/dev/sdX      то же для указанной
+#   make usb-refresh           быстро заменить только ядро на уже готовой флешке
+usb:
+	@./tools/mkusb.sh $(DEV)
+
+usb-refresh:
+	@./tools/mkusb.sh --refresh $(DEV)
 
 # Запасной вариант: записать готовый гибридный ISO как есть
 usb-iso: iso
@@ -140,3 +127,6 @@ clean:
 
 # wm.c включает .inc-файлы: без этой строки правка в них не пересобирает wm.o
 $(BUILD)/gui/wm.o: $(wildcard gui/*.inc)
+
+# зависимости от заголовков (-MMD): правка .h пересобирает то, что его включает
+-include $(shell find $(BUILD) -name "*.d" 2>/dev/null)

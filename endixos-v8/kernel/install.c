@@ -74,6 +74,7 @@ int inst_run(blk_t *d, const inst_params_t *p, inst_progress_t pr, const char **
 
     step(pr, 45, "Copying the system");
     if (fat_write(&f, "/boot/endixos.elf", p->kernel, p->kernel_len)) { *msg = "Cannot copy the kernel."; return -9; }
+    if (p->fw && p->fw_len) fat_write(&f, "/boot/rtl8192c.bin", p->fw, p->fw_len);        /* без неё Wi-Fi просто не включится */
     if (fat_write(&f, "/boot/grub/grub.cfg", p->cfg, slen(p->cfg))) { *msg = "Cannot write the boot menu."; return -10; }
 
     step(pr, 70, "Creating the user");

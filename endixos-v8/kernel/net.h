@@ -29,6 +29,7 @@ enum { NF_IDLE, NF_LOADING, NF_DONE, NF_ERROR };      /* ctype: 0 html, 1 text/p
 int  net_fetch(const char *url, u8 *buf, u32 cap);
 void net_fetch_info(net_fetch_t *f);
 void net_fetch_abort(void);
+const char *net_fetch_date(void);                    /* заголовок Date последнего ответа ("Sun, 15 Nov 2026 11:55:01 GMT") */
 void net_url_join(const char *base, const char *ref, char *out, u32 cap);
 
 int  net_job_active(void);

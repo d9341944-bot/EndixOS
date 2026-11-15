@@ -9,6 +9,7 @@ typedef struct {
     const char *fullname;                         /* отображаемое имя, любое (латиница/кириллица, UTF-8) */
     const char *password;                         /* может быть пустым */
     const char *hostname;
+    const u8 *fw; u32 fw_len;                     /* прошивка Wi-Fi (rtl8192cfw.bin) или 0 */
 } inst_params_t;
 
 typedef void (*inst_progress_t)(int percent, const char *step);

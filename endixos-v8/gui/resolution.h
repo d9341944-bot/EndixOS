@@ -12,4 +12,5 @@ int  res_available(void);                         /* 1 - можно сохран
 int  res_apply(int i, const char **msg);          /* 0 - сохранено */
 fat_t *res_mount(void);                           /* система на диске (FAT32, есть /boot/grub/grub.cfg) или 0 */
 int  res_current(void);                           /* индекс режима, совпадающего с текущим экраном, или -1 */
+int res_install_fw(const char **msg);               /* с флешки: прошивка Wi-Fi на установленную систему */
 #endif

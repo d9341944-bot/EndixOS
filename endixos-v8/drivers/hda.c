@@ -236,12 +236,12 @@ static void stream_stop(void)
     playing = 0;
 }
 
-static void stream_start(u32 frames)
+static void stream_start_buf(const void *buf, u32 frames)
 {
     stream_stop();
     stream_reset();
     u32 bytes = (frames * 4 + 127) & ~127u;
-    bdl[0] = (u32)(unsigned long)pcm; bdl[1] = 0; bdl[2] = bytes; bdl[3] = 0;
+    bdl[0] = (u32)(unsigned long)buf; bdl[1] = 0; bdl[2] = bytes; bdl[3] = 0;
     wr32(sdbase + SD_BDLPL, (u32)(unsigned long)bdl);
     wr32(sdbase + SD_BDLPU, 0);
     wr32(sdbase + SD_CBL, bytes);
@@ -252,6 +252,8 @@ static void stream_start(u32 frames)
     pending_start = 1;
     t_len = frames;                                                   /* кадров: длительность считаем при первом hda_poll */
 }
+
+static void stream_start(u32 frames) { stream_start_buf(pcm, frames); }
 
 /* ---- синтез звуков (целые числа, без float) ---- */
 static i32 sin_q14(u32 ph)                                           /* ph: 0..65535 - оборот; результат -16384..16384 */
@@ -309,6 +311,16 @@ void hda_poll(u32 now_ticks, u32 hz)
     }
     if ((i32)(now_ticks - t_start) >= (i32)t_len) stream_stop();
 }
+
+/* Чужой буфер: 48 кГц 16 бит стерео, адрес кратен 128, после frames кадров ещё 128 байт запаса. Играется один раз. */
+int hda_play_buf(const i16 *stereo48, u32 frames)
+{
+    if (!have_path || !stereo48 || frames < 64 || ((unsigned long)stereo48 & 127)) return 0;
+    stream_start_buf(stereo48, frames);
+    return 1;
+}
+
+void hda_stop(void) { stream_stop(); }
 
 int hda_present(void) { return present && have_path; }
 int hda_playing(void) { return playing; }

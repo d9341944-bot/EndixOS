@@ -40,3 +40,31 @@ void rtc_read(rtc_time_t *t)
     t->day = day; t->month = mon;
     t->year = (u16)(2000 + year);
 }
+
+static void cmos_w(u8 reg, u8 v)
+{
+    outb(0x70, reg);
+    io_wait();
+    outb(0x71, v);
+}
+
+static u8 tobcd(u8 v)
+{
+    return (u8)((v / 10) << 4 | (v % 10));
+}
+
+void rtc_write(const rtc_time_t *t)
+{
+    u8 b = cmos(0x0B);
+    cmos_w(0x0B, (u8)(b | 0x80 | 0x02));                  /* остановить обновление, 24-часовой режим */
+    b |= 0x02;
+    int bin = b & 0x04;
+    u8 yr = (u8)(t->year % 100);
+    cmos_w(0x00, bin ? t->sec : tobcd(t->sec));
+    cmos_w(0x02, bin ? t->min : tobcd(t->min));
+    cmos_w(0x04, bin ? t->hour : tobcd(t->hour));
+    cmos_w(0x07, bin ? t->day : tobcd(t->day));
+    cmos_w(0x08, bin ? t->month : tobcd(t->month));
+    cmos_w(0x09, bin ? yr : tobcd(yr));
+    cmos_w(0x0B, (u8)(b & ~0x80));                        /* часы снова идут */
+}

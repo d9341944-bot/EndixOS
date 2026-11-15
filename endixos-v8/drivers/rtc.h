@@ -10,5 +10,6 @@ typedef struct {
 } rtc_time_t;
 
 void rtc_read(rtc_time_t *t);
+void rtc_write(const rtc_time_t *t);          /* записывает локальное время в CMOS (24-часовой режим) */
 
 #endif

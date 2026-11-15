@@ -149,12 +149,14 @@ int main(int argc, char **argv)
     CHECK(fs_lookup(docs, "untitled folder") < 0, "Delete удаляет выбранную папку");
 
     /* удаление выбранного */
+    wm_tick(T += 200);                                   /* не двойной клик: двойной теперь открывает файл */
     fitem_click(2);                                      /* README.md */
     key(KEY_DELETE);
     CHECK(fs_lookup(docs, "README.md") < 0, "Delete удаляет выбранный файл");
     frame("f5_deleted");
 
     key('\b');                                           /* Backspace: наверх */
+    wm_tick(T += 200);
     fitem_click(0);                                      /* Desktop */
     key('\n');                                           /* Enter открывает папку */
     fclick(162, 43 + 10);

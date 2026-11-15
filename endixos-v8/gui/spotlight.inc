@@ -191,8 +191,126 @@ static void sp_draw(void)
 typedef struct { char title[32], text[80]; u32 t0; int on, icon; i32 v, yq; } nt_t;
 static nt_t nts[NT_MAX];
 
+/* ---------- центр уведомлений (клик по часам) ---------- */
+
+#define NH_MAX 30
+#define NC_W 380
+#define NC_ROW 78
+#define NC_HEAD 56
+typedef struct { char title[32], text[80]; int icon; u32 t0, hh, mm; } nh_t;
+static nh_t nh[NH_MAX];                            /* история, новое в начале */
+static int nh_n, nc_open, nc_scroll;
+
+static void nh_add(const char *title, const char *text, int icon)
+{
+    for (int k = NH_MAX - 1; k > 0; k--) nh[k] = nh[k - 1];
+    nh_t *n = &nh[0];
+    int i = 0;
+    while (title[i] && i < 30) { n->title[i] = title[i]; i++; }
+    n->title[i] = 0;
+    i = 0;
+    while (text[i] && i < 78) { n->text[i] = text[i]; i++; }
+    n->text[i] = 0;
+    n->icon = icon; n->t0 = now_ticks; n->hh = t_hour; n->mm = t_min;
+    if (nh_n < NH_MAX) nh_n++;
+}
+
+static i32 nc_x(void) { return (i32)fb_width() - NC_W - 10; }
+static i32 nc_y(void) { return MENUBAR_H + 8; }
+static i32 nc_h(void) { i32 h = (i32)fb_height() - MENUBAR_H - 16 - 70; return h < 260 ? 260 : h; }
+static int nc_vis(void) { return (nc_h() - NC_HEAD - 8) / NC_ROW; }
+static i32 nc_clock_x(void) { char c[48]; format_clock(c, 0); return (i32)fb_width() - 14 - font_width(c, FONT_REGULAR) - 8; }
+static int nc_inside(i32 x, i32 y) { return x >= nc_x() && x < nc_x() + NC_W && y >= nc_y() && y < nc_y() + nc_h(); }
+static void nc_close(void) { nc_open = 0; scene_dirty = 1; }
+
+static void nc_toggle(void)
+{
+    if (nc_open) { nc_close(); return; }
+    if (sp_on) sp_close();
+    cc_close(); menu_close();
+    nc_open = 1; nc_scroll = 0; scene_dirty = 1;
+}
+
+static int nc_row_at(i32 x, i32 y)                 /* индекс записи под курсором или -1; -2 - кнопка Clear */
+{
+    if (!nc_inside(x, y)) return -1;
+    if (y < nc_y() + NC_HEAD) return x >= nc_x() + NC_W - 90 && y >= nc_y() + 14 && y < nc_y() + 42 && nh_n ? -2 : -1;
+    int r = (y - nc_y() - NC_HEAD - 4) / NC_ROW + nc_scroll;
+    return r >= 0 && r < nh_n && r < nc_scroll + nc_vis() ? r : -1;
+}
+
+static int nc_press(i32 x, i32 y)                  /* 1 - клик обработан */
+{
+    int r = nc_row_at(x, y);
+    if (r == -2) { nh_n = 0; nc_scroll = 0; scene_dirty = 1; return 1; }
+    if (r >= 0) {                                  /* клик по карточке убирает её */
+        for (int k = r; k < nh_n - 1; k++) nh[k] = nh[k + 1];
+        nh_n--;
+        if (nc_scroll > 0 && nc_scroll + nc_vis() > nh_n) nc_scroll = nh_n - nc_vis() < 0 ? 0 : nh_n - nc_vis();
+        scene_dirty = 1;
+        return 1;
+    }
+    return nc_inside(x, y);
+}
+
+static int nc_wheel(int d)
+{
+    int m = nh_n - nc_vis(); if (m < 0) m = 0;
+    int t = nc_scroll + (d > 0 ? -1 : 1);
+    t = t < 0 ? 0 : t > m ? m : t;
+    if (t == nc_scroll) return 0;
+    nc_scroll = t; return 1;
+}
+
+static void nc_draw(void)
+{
+    if (!nc_open) return;
+    const theme_t *t = theme();
+    int dark = theme_is_dark();
+    i32 x = nc_x(), y = nc_y(), h = nc_h();
+    for (int k = 0; k < 6; k++) fb_fill_round_rect(x - k, y - k + 5, NC_W + 2 * k, h + 2 * k, 26 + k, RGB(0, 0, 0), 8);
+    fb_glass(x, y, NC_W, h, 26, GLASS_ALL, 14, dark ? RGB(36, 36, 42) : RGB(240, 240, 245), dark ? 150 : 165, 28);
+    font_draw(x + 20, y + 16, "Notifications", t->text, FONT_TITLE);
+    if (nh_n) {
+        int hv = nc_row_at(cur_x, cur_y) == -2;
+        fb_fill_round_rect(x + NC_W - 84, y + 16, 66, 26, 13, hv ? theme_accent() : (dark ? RGB(70, 70, 78) : RGB(222, 222, 228)), 255);
+        font_draw(x + NC_W - 84 + (66 - font_width("Clear", FONT_REGULAR)) / 2, y + 21, "Clear", hv ? RGB(255, 255, 255) : t->text, FONT_REGULAR);
+    }
+    if (!nh_n) {
+        const char *m = "No Notifications";
+        font_draw(x + (NC_W - font_width(m, FONT_REGULAR)) / 2, y + h / 2 - 8, m, t->sub, FONT_REGULAR);
+        return;
+    }
+    int hot = nc_row_at(cur_x, cur_y);
+    for (int r = 0; r < nc_vis() && nc_scroll + r < nh_n; r++) {
+        nh_t *n = &nh[nc_scroll + r];
+        i32 ry = y + NC_HEAD + 4 + r * NC_ROW;
+        fb_fill_round_rect(x + 12, ry, NC_W - 24, NC_ROW - 8, 18, dark ? RGB(255, 255, 255) : RGB(255, 255, 255), nc_scroll + r == hot ? (dark ? 46 : 230) : (dark ? 26 : 160));
+        if (n->icon >= 0) icon_draw(n->icon, x + 24, ry + 15, 38);
+        else {
+            fb_fill_round_rect(x + 24, ry + 15, 38, 38, 10, theme_accent(), 255);
+            logo_draw(x + 24 + 9, ry + 15 + 9, 20, RGB(255, 255, 255));
+        }
+        char tm[12];
+        if ((u32)(now_ticks - n->t0) < 6000) { const char *w = "now"; int i = 0; while (w[i]) { tm[i] = w[i]; i++; } tm[i] = 0; }
+        else { tm[0] = (char)('0' + n->hh / 10 % 10); tm[1] = (char)('0' + n->hh % 10); tm[2] = ':'; tm[3] = (char)('0' + n->mm / 10 % 10); tm[4] = (char)('0' + n->mm % 10); tm[5] = 0; }
+        font_draw(x + 74, ry + 12, n->title, t->text, FONT_BOLD);
+        font_draw(x + NC_W - 24 - font_width(tm, FONT_REGULAR), ry + 12, tm, t->sub, FONT_REGULAR);
+        char b[80]; int c = 0;
+        while (n->text[c] && c < 78) { b[c] = n->text[c]; c++; }
+        b[c] = 0;
+        while (c > 1 && font_width(b, FONT_REGULAR) > NC_W - 108) { c--; while (c > 1 && ((u8)b[c] & 0xC0) == 0x80) c--; b[c] = 0; }
+        font_draw(x + 74, ry + 36, b, t->sub, FONT_REGULAR);
+    }
+    if (nh_n > nc_vis()) {                                                         /* полоса прокрутки */
+        i32 th = (h - NC_HEAD - 16) * nc_vis() / nh_n, ty = y + NC_HEAD + 8 + (h - NC_HEAD - 16 - th) * nc_scroll / (nh_n - nc_vis());
+        fb_fill_round_rect(x + NC_W - 8, ty, 3, th, 1, t->sub, 160);
+    }
+}
+
 static void notify_icon(const char *title, const char *text, int icon)
 {
+    nh_add(title, text, icon);
     for (int k = NT_MAX - 1; k > 0; k--) nts[k] = nts[k - 1];     /* остальные сдвигаются вниз */
     nt_t *n = &nts[0];
     int i = 0;

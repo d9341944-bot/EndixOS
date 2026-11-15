@@ -10,6 +10,8 @@ void hda_set_volume(int pct);              /* 0..100 */
 void hda_play_chime(void);                 /* звук запуска */
 void hda_play_pop(void);                   /* щелчок при смене громкости */
 void hda_poll(u32 now_ticks, u32 hz);      /* останавливает воспроизведение, когда звук закончился */
+int  hda_play_buf(const i16 *stereo48, u32 frames);   /* свой буфер (плеер): 48 кГц стерео 16 бит, адрес кратен 128; 1 - запущено */
+void hda_stop(void);
 int  hda_present(void);
 int  hda_playing(void);
 void hda_diag(char *out, int cap);         /* текст для команды audio */

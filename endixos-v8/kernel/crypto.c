@@ -365,3 +365,206 @@ void rng_fill(u8 *out, u32 n)
         rng_mix(h[31] ^ (u32)h[7] << 8);
     }
 }
+
+/* ---------------- WPA2: SHA-1, HMAC-SHA1, PBKDF2, PRF, AES (шифрование/расшифровка блока), key unwrap, CCM ---------------- */
+
+typedef struct { u32 h[5]; u8 buf[64]; u32 len, total; } sha1_t;
+static u32 rol32(u32 x, int n) { return x << n | x >> (32 - n); }
+
+static void sha1_block(sha1_t *c, const u8 *p)
+{
+    u32 w[80];
+    for (int i = 0; i < 16; i++) w[i] = (u32)p[4*i] << 24 | (u32)p[4*i+1] << 16 | (u32)p[4*i+2] << 8 | p[4*i+3];
+    for (int i = 16; i < 80; i++) w[i] = rol32(w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16], 1);
+    u32 a = c->h[0], b = c->h[1], cc = c->h[2], d = c->h[3], e = c->h[4];
+    for (int i = 0; i < 80; i++) {
+        u32 f, k;
+        if (i < 20) { f = (b & cc) | (~b & d); k = 0x5A827999; }
+        else if (i < 40) { f = b ^ cc ^ d; k = 0x6ED9EBA1; }
+        else if (i < 60) { f = (b & cc) | (b & d) | (cc & d); k = 0x8F1BBCDC; }
+        else { f = b ^ cc ^ d; k = 0xCA62C1D6; }
+        u32 t = rol32(a, 5) + f + e + k + w[i];
+        e = d; d = cc; cc = rol32(b, 30); b = a; a = t;
+    }
+    c->h[0] += a; c->h[1] += b; c->h[2] += cc; c->h[3] += d; c->h[4] += e;
+}
+static void sha1_init(sha1_t *c) { c->h[0] = 0x67452301; c->h[1] = 0xEFCDAB89; c->h[2] = 0x98BADCFE; c->h[3] = 0x10325476; c->h[4] = 0xC3D2E1F0; c->len = 0; c->total = 0; }
+static void sha1_update(sha1_t *c, const void *d, u32 n)
+{
+    const u8 *p = d;
+    c->total += n;
+    while (n) {
+        u32 k = 64 - c->len; if (k > n) k = n;
+        mcopy(c->buf + c->len, p, k);
+        c->len += k; p += k; n -= k;
+        if (c->len == 64) { sha1_block(c, c->buf); c->len = 0; }
+    }
+}
+static void sha1_final(sha1_t *c, u8 out[20])
+{
+    u32 bits_hi = c->total >> 29, bits_lo = c->total << 3;
+    u8 pad = 0x80;
+    sha1_update(c, &pad, 1);
+    pad = 0;
+    while (c->len != 56) sha1_update(c, &pad, 1);
+    u8 l[8] = { (u8)(bits_hi >> 24), (u8)(bits_hi >> 16), (u8)(bits_hi >> 8), (u8)bits_hi, (u8)(bits_lo >> 24), (u8)(bits_lo >> 16), (u8)(bits_lo >> 8), (u8)bits_lo };
+    sha1_update(c, l, 8);
+    for (int i = 0; i < 5; i++) { out[4*i] = (u8)(c->h[i] >> 24); out[4*i+1] = (u8)(c->h[i] >> 16); out[4*i+2] = (u8)(c->h[i] >> 8); out[4*i+3] = (u8)c->h[i]; }
+}
+
+void hmac_sha1(const u8 *key, u32 kl, const u8 *msg, u32 ml, u8 out[20])
+{
+    u8 k[64], t[64], in[20];
+    mzero(k, 64);
+    if (kl > 64) { sha1_t s; sha1_init(&s); sha1_update(&s, key, kl); sha1_final(&s, k); } else mcopy(k, key, kl);
+    sha1_t s;
+    for (int i = 0; i < 64; i++) t[i] = k[i] ^ 0x36;
+    sha1_init(&s); sha1_update(&s, t, 64); sha1_update(&s, msg, ml); sha1_final(&s, in);
+    for (int i = 0; i < 64; i++) t[i] = k[i] ^ 0x5c;
+    sha1_init(&s); sha1_update(&s, t, 64); sha1_update(&s, in, 20); sha1_final(&s, out);
+}
+
+/* PBKDF2-HMAC-SHA1: так из пароля и имени сети получают 32-байтовый ключ PMK (4096 итераций). */
+void pbkdf2_sha1(const u8 *pass, u32 pl, const u8 *salt, u32 sl, u32 iter, u8 *out, u32 olen)
+{
+    u8 s[64 + 4], u[20], t[20];
+    if (sl > 64) sl = 64;
+    for (u32 blk = 1; olen; blk++) {
+        mcopy(s, salt, sl);
+        s[sl] = (u8)(blk >> 24); s[sl+1] = (u8)(blk >> 16); s[sl+2] = (u8)(blk >> 8); s[sl+3] = (u8)blk;
+        hmac_sha1(pass, pl, s, sl + 4, u);
+        mcopy(t, u, 20);
+        for (u32 i = 1; i < iter; i++) {
+            hmac_sha1(pass, pl, u, 20, u);
+            for (int j = 0; j < 20; j++) t[j] ^= u[j];
+        }
+        u32 k = olen > 20 ? 20 : olen;
+        mcopy(out, t, k); out += k; olen -= k;
+    }
+}
+
+/* PRF из IEEE 802.11i: HMAC-SHA1(key, label || 0 || data || counter). */
+void wpa_prf(const u8 *key, u32 kl, const char *label, const u8 *data, u32 dl, u8 *out, u32 olen)
+{
+    u8 buf[128]; u32 ll = 0;
+    while (label[ll]) { buf[ll] = (u8)label[ll]; ll++; }
+    buf[ll++] = 0;
+    if (dl > 100 - ll) dl = 100 - ll;
+    mcopy(buf + ll, data, dl);
+    u32 n = ll + dl; u8 ctr = 0;
+    while (olen) {
+        u8 h[20]; buf[n] = ctr++;
+        hmac_sha1(key, kl, buf, n + 1, h);
+        u32 k = olen > 20 ? 20 : olen;
+        mcopy(out, h, k); out += k; olen -= k;
+    }
+}
+
+typedef struct { u8 rk[176]; } aes128_t;
+void aes128_set_key(aes128_t *c, const u8 key[16])
+{
+    aesgcm_t g; aesgcm_init(&g, key);
+    mcopy(c->rk, g.rk, 176);
+}
+void aes128_encrypt(const aes128_t *c, const u8 in[16], u8 out[16]) { aes_enc(c->rk, in, out); }
+
+static u8 isbox[256]; static int isbox_ok;
+static u8 gmul8(u8 a, u8 b) { u8 r = 0; while (b) { if (b & 1) r ^= a; a = xt(a); b >>= 1; } return r; }
+void aes128_decrypt(const aes128_t *c, const u8 in[16], u8 out[16])
+{
+    if (!sbox_ok) gen_sbox();
+    if (!isbox_ok) { for (int i = 0; i < 256; i++) isbox[sbox[i]] = (u8)i; isbox_ok = 1; }
+    u8 s[16], t[16];
+    for (int i = 0; i < 16; i++) s[i] = in[i] ^ c->rk[160 + i];
+    for (int r = 9; r >= 0; r--) {
+        for (int col = 0; col < 4; col++)                            /* InvShiftRows + InvSubBytes */
+            for (int row = 0; row < 4; row++) t[4 * ((col + row) & 3) + row] = isbox[s[4 * col + row]];
+        for (int i = 0; i < 16; i++) t[i] ^= c->rk[16 * r + i];
+        if (r > 0) {
+            for (int col = 0; col < 4; col++) {
+                u8 a0 = t[4*col], a1 = t[4*col+1], a2 = t[4*col+2], a3 = t[4*col+3];
+                s[4*col]   = (u8)(gmul8(a0, 14) ^ gmul8(a1, 11) ^ gmul8(a2, 13) ^ gmul8(a3, 9));
+                s[4*col+1] = (u8)(gmul8(a0, 9) ^ gmul8(a1, 14) ^ gmul8(a2, 11) ^ gmul8(a3, 13));
+                s[4*col+2] = (u8)(gmul8(a0, 13) ^ gmul8(a1, 9) ^ gmul8(a2, 14) ^ gmul8(a3, 11));
+                s[4*col+3] = (u8)(gmul8(a0, 11) ^ gmul8(a1, 13) ^ gmul8(a2, 9) ^ gmul8(a3, 14));
+            }
+        } else mcopy(s, t, 16);
+    }
+    mcopy(out, s, 16);
+}
+
+/* RFC 3394: развернуть ключи группы из EAPOL. in - n*8 байт (n >= 2), out - (n-1)*8 байт. 1 - целостность подтверждена. */
+int aes_key_unwrap(const u8 kek[16], const u8 *in, u32 n, u8 *out)
+{
+    aes128_t k; aes128_set_key(&k, kek);
+    u8 a[8], b[16];
+    if (n < 2) return 0;
+    mcopy(a, in, 8);
+    mcopy(out, in + 8, (n - 1) * 8);
+    for (int j = 5; j >= 0; j--)
+        for (int i = (int)n - 1; i >= 1; i--) {
+            u32 t = (u32)((int)(n - 1) * j + i);
+            mcopy(b, a, 8); b[7] ^= (u8)t; b[6] ^= (u8)(t >> 8);
+            mcopy(b + 8, out + (i - 1) * 8, 8);
+            aes128_decrypt(&k, b, b);
+            mcopy(a, b, 8); mcopy(out + (i - 1) * 8, b + 8, 8);
+        }
+    for (int i = 0; i < 8; i++) if (a[i] != 0xA6) return 0;
+    return 1;
+}
+
+/* AES-CCM для CCMP (802.11i): nonce 13 байт, тег 8 байт. Шифрует/расшифровывает n байт in -> out. */
+static void ccm_mac(const aes128_t *k, const u8 nonce[13], const u8 *aad, u32 al, const u8 *msg, u32 n, u8 mac[16])
+{
+    u8 b[16], x[16];
+    b[0] = 0x59; mcopy(b + 1, nonce, 13); b[14] = (u8)(n >> 8); b[15] = (u8)n;
+    aes128_encrypt(k, b, x);
+    u8 hdr[2] = { (u8)(al >> 8), (u8)al };
+    u32 pos = 0; int first = 1;
+    while (first || pos < al) {                                       /* AAD с префиксом длины */
+        mzero(b, 16); u32 o = 0;
+        if (first) { b[0] = hdr[0]; b[1] = hdr[1]; o = 2; first = 0; }
+        while (o < 16 && pos < al) b[o++] = aad[pos++];
+        for (int i = 0; i < 16; i++) x[i] ^= b[i];
+        aes128_encrypt(k, x, x);
+    }
+    for (u32 p = 0; p < n; p += 16) {
+        mzero(b, 16); u32 m = n - p > 16 ? 16 : n - p; mcopy(b, msg + p, m);
+        for (int i = 0; i < 16; i++) x[i] ^= b[i];
+        aes128_encrypt(k, x, x);
+    }
+    mcopy(mac, x, 16);
+}
+static void ccm_ctr(const aes128_t *k, const u8 nonce[13], u32 ctr, u8 out[16])
+{
+    u8 a[16]; a[0] = 0x01; mcopy(a + 1, nonce, 13); a[14] = (u8)(ctr >> 8); a[15] = (u8)ctr;
+    aes128_encrypt(k, a, out);
+}
+void ccmp_seal(const u8 key[16], const u8 nonce[13], const u8 *aad, u32 al, const u8 *in, u32 n, u8 *out, u8 mic[8])
+{
+    aes128_t k; aes128_set_key(&k, key);
+    u8 mac[16], s[16];
+    ccm_mac(&k, nonce, aad, al, in, n, mac);
+    ccm_ctr(&k, nonce, 0, s);
+    for (int i = 0; i < 8; i++) mic[i] = mac[i] ^ s[i];
+    for (u32 p = 0, c = 1; p < n; p += 16, c++) {
+        ccm_ctr(&k, nonce, c, s);
+        u32 m = n - p > 16 ? 16 : n - p;
+        for (u32 i = 0; i < m; i++) out[p + i] = in[p + i] ^ s[i];
+    }
+}
+int ccmp_open(const u8 key[16], const u8 nonce[13], const u8 *aad, u32 al, const u8 *in, u32 n, u8 *out, const u8 mic[8])
+{
+    aes128_t k; aes128_set_key(&k, key);
+    u8 s[16], mac[16], t[8];
+    for (u32 p = 0, c = 1; p < n; p += 16, c++) {
+        ccm_ctr(&k, nonce, c, s);
+        u32 m = n - p > 16 ? 16 : n - p;
+        for (u32 i = 0; i < m; i++) out[p + i] = in[p + i] ^ s[i];
+    }
+    ccm_mac(&k, nonce, aad, al, out, n, mac);
+    ccm_ctr(&k, nonce, 0, s);
+    int ok = 1;
+    for (int i = 0; i < 8; i++) { t[i] = mac[i] ^ s[i]; if (t[i] != mic[i]) ok = 0; }
+    return ok;
+}

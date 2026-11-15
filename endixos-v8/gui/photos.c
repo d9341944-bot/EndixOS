@@ -8,7 +8,7 @@ static photo_t ph[PHOTO_MAX];
 static int nph;
 static blk_t vol_blk;                                    /* раздел, где лежат фотографии */
 static u32 vol_start;
-static int have_vol;
+static int have_vol, have_mount;
 
 static u8  filebuf[PHOTO_FILE_MAX];
 static u32 tmpbuf[1920 * 1080];                          /* промежуточный кадр перед обрезкой */
@@ -57,6 +57,7 @@ int photos_scan_volume(blk_t *b, u32 start)
     static fat_t f;
     nph = 0; have_vol = 0;
     if (fat_mount(b, start, &f) != 0) return 0;
+    vol_blk = *b; vol_start = start; have_mount = 1;   /* раздел известен и без фотографий: там же ищет музыку Music */
     fat_list(&f, "/Pictures", on_entry, 0);
     if (nph) { vol_blk = *b; vol_start = start; have_vol = 1; }
     return nph;
@@ -76,6 +77,8 @@ int photos_scan(void)
     }
     return 0;
 }
+
+int photos_volume(fat_t *f) { return have_mount && fat_mount(&vol_blk, vol_start, f) == 0; }
 
 int photos_count(void) { return nph; }
 const char *photos_name(int k) { return k >= 0 && k < nph ? ph[k].name : ""; }
