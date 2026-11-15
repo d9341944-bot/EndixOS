@@ -1,30 +1,121 @@
-# EndixOS 8.1 beta
+<p align="center">
+  <img src="endixos-v8/docs/banner.png" alt="EndixOS" width="100%">
+</p>
 
-An operating system written from scratch: its own 32-bit x86 kernel in C and assembly, and a graphical desktop in the style of macOS (Liquid Glass). No Linux, no libc, no third-party libraries.
+<p align="center">
+  <img alt="version" src="https://img.shields.io/badge/version-8.2-7c5cff?style=for-the-badge">
+  <img alt="arch" src="https://img.shields.io/badge/arch-x86%20(i386)-1f6feb?style=for-the-badge">
+  <img alt="language" src="https://img.shields.io/badge/C%20%2B%20asm-from%20scratch-f78166?style=for-the-badge">
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-3fb950?style=for-the-badge">
+  <img alt="libc" src="https://img.shields.io/badge/libc-none-8b949e?style=for-the-badge">
+</p>
 
-> This is an educational, experimental project. Target hardware: an old netbook (Atom, 2 GB RAM, BIOS/Legacy). Much of it has only been verified by host-side tests and in an emulator, see [Status](#status).
+<p align="center">
+  <b>A hobby operating system with its own kernel and a macOS-style desktop.<br>
+  No Linux. No libc. No third-party libraries. About 31 000 lines of C and assembly.</b>
+</p>
 
-## Features
+<p align="center">
+  <a href="#-screenshots">Screenshots</a> ·
+  <a href="#-features">Features</a> ·
+  <a href="#-build-and-run">Build and run</a> ·
+  <a href="#-status">Status</a> ·
+  <a href="#-roadmap">Roadmap</a> ·
+  <a href="#-по-русски">По-русски</a>
+</p>
 
-**System**
-- Multiboot boot via GRUB, GDT/IDT/PIC, 100 Hz PIT timer, RTC
-- PS/2 keyboard and mouse, event queue
-- In-memory file system and on-disk FAT32 (read/write, long file names on read)
-- Graphical installer: MBR partitioning, FAT32, GRUB bootloader, login screen with user accounts
-- Trash, Spotlight-style search, notifications
+---
 
-**Hardware**
-- AHCI (SATA), Intel HD Audio (sound), JMicron JMC250/260 and e1000 (network)
-- Network stack with built-in TLS (HTTPS) and a simple web browser
+## 🖼 Screenshots
 
-**Desktop**
-- Animated windows, Dock with context menu, menu bar, Mission Control, Control Center
-- Files (icon and list views), Settings, Terminal, browser, Snake
-- Transparent menu bar in the style of macOS Tahoe, light/dark themes, accent colors
-- 5 built-in 3D wallpapers (pre-rendered, embedded in the kernel) and your own photos from `/Pictures` (JPEG)
-- Screen resolution picker applied on next boot (Settings → Displays)
+<table>
+  <tr>
+    <td width="50%"><img src="endixos-v8/docs/screenshots/1-desktop.png" alt="Desktop"><br><sub><b>Desktop</b>: Dock, menu bar, widgets, Files, Music</sub></td>
+    <td width="50%"><img src="endixos-v8/docs/screenshots/2-dark-terminal.png" alt="Dark theme"><br><sub><b>Dark theme</b>: Terminal, Calendar, Notes</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="endixos-v8/docs/screenshots/3-notifications.png" alt="Notification Center"><br><sub><b>Notification Center</b>: click the clock</sub></td>
+    <td width="50%"><img src="endixos-v8/docs/screenshots/6-dynamic-wallpaper.png" alt="Dynamic wallpaper"><br><sub><b>Dynamic wallpapers</b>: day and night, switched by the clock</sub></td>
+  </tr>
+</table>
 
-## Build and run
+<p align="center"><img src="endixos-v8/docs/screenshots/5-wallpapers.png" alt="Wallpapers" width="85%"><br><sub>12 built-in wallpapers, rendered ahead of time and embedded in the kernel</sub></p>
+
+<p align="center"><img src="endixos-v8/docs/screenshots/4-icons.png" alt="Icons" width="60%"><br><sub>Every icon is drawn in code (signed-distance shapes), no image files</sub></p>
+
+> Screenshots come from the host-side test harness (a 1024×768 framebuffer), not from a camera.
+
+## ✨ Features
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+
+### 🧠 Kernel
+- Multiboot boot via GRUB
+- GDT / IDT / PIC, 100 Hz PIT, RTC
+- PS/2 keyboard, mouse, Synaptics touchpad
+- In-memory FS and on-disk **FAT32**
+- Network stack with **TLS (HTTPS)**
+- No libc: no 64-bit division, no floats
+
+</td>
+    <td width="33%" valign="top">
+
+### 🔌 Drivers
+- AHCI (SATA)
+- Intel HD Audio
+- JMicron JMC250/260 and e1000 Ethernet
+- Realtek Wi-Fi (RTL8188CE)
+- **USB 2.0 (EHCI)** mass storage
+- Battery via the embedded controller
+
+</td>
+    <td width="33%" valign="top">
+
+### 🖥 Desktop
+- Animated windows, Dock, Mission Control
+- Control Center, Spotlight, Launchpad
+- Notification Center and widgets
+- Light / dark themes, accent colors
+- Liquid Glass look, icon styles
+- Dynamic day/night wallpapers
+
+</td>
+  </tr>
+  <tr>
+    <td valign="top">
+
+### 📦 Apps
+- **Files**: copy, paste, rename, trash, context menu
+- **Preview** and **TextEdit** windows
+- **Terminal** with built-in commands
+- **Browix**: a small web browser (HTTPS)
+- Calculator, Notes, Snake
+
+</td>
+    <td valign="top">
+
+### 🕐 Everyday tools
+- Clock: stopwatch and timer
+- Calendar with the real date
+- Music player with built-in tunes and WAV files
+- Settings for display, sound, Wi-Fi, trackpad, updates
+
+</td>
+    <td valign="top">
+
+### 🛠 System
+- Graphical **installer**: MBR, FAT32, GRUB
+- Login screen with user accounts
+- **Software Update** over the network, previous version stays in GRUB
+- Performance mode for slow screens
+
+</td>
+  </tr>
+</table>
+
+## 🚀 Build and run
 
 Arch / CachyOS:
 
@@ -42,33 +133,54 @@ lsblk                      # find your USB drive; a wrong name will erase anothe
 make usb DEV=/dev/sdX      # builds the image and writes it to the drive (removable devices only)
 ```
 
-Then boot from USB in Legacy/CSM mode. Pick a resolution for your screen in the GRUB menu. The system runs from RAM until you install it to disk with the built-in installer.
+Boot from USB in Legacy/CSM mode and pick a resolution in the GRUB menu. The system runs from RAM until you install it with the built-in installer.
 
-## Project layout
+## 🗂 Project layout
 
 ```
 boot/      bootloader (Multiboot), interrupt stubs
-kernel/    kernel: memory, FAT32, MBR, networking, TLS, crypto, installation
-drivers/   PIT, PS/2, RTC, PCI, AHCI, HD Audio, e1000, JMicron
-gui/       graphics, fonts, windows, apps, wallpapers, installer
-assets/    pre-rendered 3D wallpapers (wall.pak)
-tools/     font generator, wallpaper renderer, host-side tests
+kernel/    memory, FAT32, MBR, networking, TLS, crypto, installer
+drivers/   PIT, PS/2, RTC, PCI, AHCI, HD Audio, Ethernet, Wi-Fi, USB, EC
+gui/       graphics, fonts, window manager, apps, wallpapers
+assets/    pre-rendered wallpapers (wall.pak)
+tools/     font and wallpaper generators, host-side tests
 docs/      development notes by stage (NOTES.md)
+update/    the latest kernel and manifest for Software Update
 ```
 
-## Tests
+All of it lives in [`endixos-v8/`](endixos-v8/).
 
-Host-side tests (`tools/tests/`) pull in the GUI and driver sources and check their logic: windows, Files, Settings, the installer, FAT32, the sound driver against a controller model, and more. They are not a substitute for testing on real hardware.
+## 🧪 Tests
 
-## Status
+Host-side tests (`endixos-v8/tools/tests/`) pull in the GUI and driver sources and check their logic: windows, Files, Settings, the installer, FAT32, a fake HD Audio controller and a fake **EHCI controller with a USB flash drive**. They do not replace testing on real hardware.
+
+## 📋 Status
+
+Target hardware: an old netbook (Intel Atom, 2 GB RAM, BIOS/Legacy, 1024×600). The system boots there and runs the desktop.
 
 | Component | Verification |
 |---|---|
-| GUI, windows, animations, Files, Settings | host tests, screenshots |
+| Desktop, windows, animations, apps | host tests, screenshots, **real netbook** |
 | FAT32, installer, MBR | host tests, disk images |
-| AHCI, HD Audio, JMicron, photo wallpapers, `grub.cfg` writing | **not verified on real hardware** |
-| Wi-Fi, USB storage, eMMC/SD | not supported yet |
+| AHCI, HD Audio, Wi-Fi, touchpad, battery, USB storage | host models only, **not yet confirmed on hardware** |
+| USB keyboards and mice, hubs, xHCI | not supported yet |
 
-## License
+## 🗺 Roadmap
+
+- [x] Own kernel, FAT32, installer, network and TLS
+- [x] macOS-style desktop with Dock, Spotlight, Mission Control
+- [x] Files, Clock, Calendar, Music, TextEdit, Preview, Browix
+- [x] USB mass storage (first stage)
+- [ ] USB flash drive in Files
+- [ ] Russian keyboard layout and font
+- [ ] Set date and time, sync over the network
+- [ ] USB keyboard, mouse and hubs
+- [ ] Working brightness keys
+
+## 🇷🇺 По-русски
+
+**EndixOS** это операционная система, написанная с нуля: своё 32-битное ядро на C и ассемблере и рабочий стол в духе macOS. Без Linux и без чужих библиотек. Целевое железо: старый нетбук (Atom, 2 ГБ ОЗУ). Запуск: `make run` (QEMU) или `make usb DEV=/dev/sdX` для загрузочной флешки. Обновления ставятся из Настроек → Software Update, файлы лежат в [`endixos-v8/update/`](endixos-v8/update/).
+
+## 📄 License
 
 Released under the [MIT License](LICENSE). Fonts: Inter (SIL Open Font License), DejaVu Sans Mono (Bitstream Vera / DejaVu license).
