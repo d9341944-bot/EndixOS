@@ -330,3 +330,9 @@ Put JPEG/PNG files into the folder `Pictures` in the root of the SATA disk's FAT
 - UTF-8 в редакторах: gui/font.h (utf8_put/clen/prev/cp/append/pop, is_text_cp). Русский ввод: Notes, TextEdit, Spotlight, Launchpad, поиск в Settings, переименование в Files, адресная строка Browix (поиск кодирует байты в %XX).
 - Пароли (вход, установщик, Wi-Fi) и терминал остались ASCII. Поиск без учёта регистра пока только для латиницы.
 - Тесты: tools/tests/rukbd.c, rutest.c.
+
+## Язык и регион (build 38)
+- Settings → Language & Region: язык интерфейса English/Русский и раскладка клавиатуры при запуске. Хранится в prefs (lg_ok/lg_ui/lg_kb); раскладка запоминается последней использованной.
+- gui/lang.c: tr() переводит английские строки оболочки (меню-бар, меню, названия приложений и заголовки окон, Dock, Launchpad, Spotlight, боковая панель Settings, страницы Date & Time и Language). Неизвестные строки остаются английскими: остальные страницы и приложения переводятся по мере добавления в таблицу.
+- Боковая панель Settings: шаг 27 px, чтобы поместились 14 страниц.
+- Тест: tools/tests/lgshot.c.

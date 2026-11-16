@@ -1,5 +1,5 @@
-build=37
-version=8.2
-size=3311984
-notes=Русская раскладка (Alt+Shift)|Русский ввод в Заметках, Spotlight, Browix, Files
-sha256=d6fd81f4b87b5ebc17435d3bdc05116c2cbaca94d86ff5d9f85620ce2ca2b0dc
+build=38
+version=8.3
+size=3320360
+notes=Язык и регион: интерфейс на русском|Русская раскладка (Alt+Shift)
+sha256=60829690a492a217e9978aea0c443ea30cb3a87226e85b2afa1d4bb79e76586c

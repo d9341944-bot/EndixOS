@@ -33,6 +33,7 @@ __attribute__((weak)) u32 pci_read32(u32 bus, u32 dev, u32 fn, u32 off) { (void)
 #include "anim.h"
 #include "mission.h"
 #include "font.h"
+#include "lang.h"
 #include "theme.h"
 #include "control.h"
 #include "logo.h"
@@ -1620,7 +1621,7 @@ static void draw_dock(void)
         i32 ix, iy;
         dock_icon_pos(hv, &ix, &iy);
         i32 sz = dk_s[DSLOT(hv)];
-        const char *nm = hv == LP_ID ? "Launchpad" : hv == TRASH_ID ? "Trash" : app_name[hv];
+        const char *nm = hv == LP_ID ? "Launchpad" : hv == TRASH_ID ? tr("Trash") : tr(app_name[hv]);
         i32 tw = font_width(nm, FONT_REGULAR) + 22;
         i32 tx = ix + sz / 2 - tw / 2, ty = iy - 36 + (1024 - lbl_v) * 6 / 1024;
         fb_glass(tx, ty, tw, 26, 10, GLASS_ALL, 6, RGB(36, 36, 42), 150 * lbl_v / 1024, 30);
@@ -1929,7 +1930,7 @@ static void mc_render(void)
         i32 al = (e - 640) * 1024 / 384;
         for (int k = 0; k < mc_n; k++) {
             int a = mc_ids[k];
-            const char *t = app_name[a];
+            const char *t = tr(app_name[a]);
             i32 tw = font_width(t, FONT_REGULAR) + 22, cx = mc_x[a] + mc_w[a] / 2, ly = mc_y[a] + mc_h[a] + 8;
             anim_region_begin(cx - tw / 2 - 2, ly - 2, tw + 4, 28);
             mc_label(t, cx, ly);
@@ -1971,7 +1972,7 @@ static int    mn;
 
 static void mi(const char *label, int id, int disabled)
 {
-    mitems[mn].label = label;
+    mitems[mn].label = tr(label);
     mitems[mn].id = id;
     mitems[mn].disabled = disabled;
     mn++;
@@ -2205,7 +2206,7 @@ static void draw_menubar(void)
     static const char *const menus[] = { "File", "Edit", "View", "Window", "Help" };
     i32 x = 40;
     for (int i = 1; i < MENU_COUNT; i++) {
-        const char *nm = i == 1 ? (top >= 0 ? app_name[top] : "EndixOS") : menus[i - 2];
+        const char *nm = i == 1 ? (top >= 0 ? tr(app_name[top]) : "EndixOS") : tr(menus[i - 2]);
         int st = i == 1 ? FONT_BOLD : FONT_REGULAR;
         i32 w = font_width(nm, st);
         mt_x0[i] = x - 8;
@@ -2253,7 +2254,7 @@ static int lp_list(int *out)
 {
     int n = 0;
     for (int a = 0; a < APP_COUNT; a++) {
-        const char *nm = app_name[a];
+        const char *nm = tr(app_name[a]);
         int ok = lp_qn == 0;
         for (int i = 0; !ok && nm[i]; i++) {
             int j = 0;
@@ -2326,7 +2327,7 @@ static void draw_launchpad(void)
         if (list[k] == hov)
             fb_fill_round_rect(ix - 10, y - 8, LP_ICON + 20, LP_CELLH - 10, 22, RGB(255, 255, 255), 34);
         lp_draw_icon(list[k], ix, y);
-        const char *nm = app_name[list[k]];
+        const char *nm = tr(app_name[list[k]]);
         font_draw(x + LP_CELLW / 2 - font_width(nm, FONT_REGULAR) / 2 + 1, y + LP_ICON + 13, nm, RGB(0, 0, 0), FONT_REGULAR);
         font_draw(x + LP_CELLW / 2 - font_width(nm, FONT_REGULAR) / 2, y + LP_ICON + 12, nm, RGB(255, 255, 255), FONT_REGULAR);
     }
@@ -2653,7 +2654,7 @@ static void draw_window(int app, int focused)
         }
     }
 
-    const char *ttl = (app == APP_BROWSER && browser_title()[0]) ? browser_title() : app == APP_TEXTEDIT ? te_title() : app == APP_PREVIEW ? viewer_title() : app_title[app];
+    const char *ttl = (app == APP_BROWSER && browser_title()[0]) ? browser_title() : app == APP_TEXTEDIT ? te_title() : app == APP_PREVIEW ? viewer_title() : tr(app_title[app]);
     i32 tw = font_width(ttl, FONT_BOLD);
     if (tw > w->w - 190) { tw = w->w - 190; }
     font_draw(w->x + (w->w - tw) / 2, w->y + (TITLE_H - font_height[FONT_BOLD]) / 2,
@@ -3181,6 +3182,7 @@ static void lock_now(void)
 }
 
 __attribute__((weak)) int kbd_layout(void) { return 0; }
+__attribute__((weak)) void kbd_set_layout(int ru) { (void)ru; }
 
 void wm_handle_event(const event_t *e)
 {

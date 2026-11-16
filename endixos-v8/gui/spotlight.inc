@@ -68,7 +68,7 @@ static void sp_search(void)
         }
     }
     for (int a = 0; a < APP_COUNT; a++)
-        if (sp_has(app_name[a], sp_q)) sp_add(SR_APP, a, -1, app_name[a]);
+        if (sp_has(tr(app_name[a]), sp_q)) sp_add(SR_APP, a, -1, tr(app_name[a]));
     if (sp_has("Launchpad", sp_q)) sp_add(SR_APP, -2, -1, "Launchpad");
     if (sp_has("Install EndixOS", sp_q) || sp_has("Installer", sp_q)) sp_add(SR_APP, -4, -1, "Install EndixOS");
     if (sp_has("Mission Control", sp_q)) sp_add(SR_APP, -3, -1, "Mission Control");

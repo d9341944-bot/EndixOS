@@ -6,6 +6,8 @@
 #include "../drivers/ps2.h"
 #include "battery.h"
 #include "timeset.h"
+#include "lang.h"
+#include "../drivers/ps2.h"
 #include "widgets.h"
 #include "control.h"
 #include "wallpaper.h"
@@ -38,7 +40,8 @@ typedef struct {
     u8  tp_ok, tp_speed, tp_tap, tp_nat;         /* тачпад; tp_ok = 0xA5, когда поля записаны (в старых файлах нули) */
     u8  bat_ok, bat_pct, bat_ac, bat_mask;       /* батарея: смещения в EC (bat_ok = 0xA5, когда заданы; pct 0xFF - выключено) */
     u8  ts_ok, ts_auto, ts_tz;                   /* время: ts_ok = 0xA5, когда заданы; пояс в четвертях часа + 64, автосинхронизация */
-    u8  pad[512 - 3 - 4 - 9 - GLASS_PARAMS - 1 - 8 - 16 - 1 - 1 - 1 - 1 - 33 - 64 - 1 - 1 - 4 - 4];
+    u8  lg_ok, lg_ui, lg_kb;                     /* язык: lg_ok = 0xA5, когда заданы; язык интерфейса и раскладка при старте */
+    u8  pad[512 - 3 - 3 - 4 - 9 - GLASS_PARAMS - 1 - 8 - 16 - 1 - 1 - 1 - 1 - 33 - 64 - 1 - 1 - 4 - 4];
 } blob_t;
 
 __attribute__((weak)) fat_t *res_mount(void) { return 0; }
@@ -73,6 +76,7 @@ static void gather(blob_t *b)
     b->avatar = (u8)avatar_get(); b->avatar_bg = (u8)avatar_color();
     { int sp, tp, nt; ps2_tp_get(&sp, &tp, &nt); b->tp_ok = 0xA5; b->tp_speed = (u8)sp; b->tp_tap = (u8)tp; b->tp_nat = (u8)nt; }
     b->ts_ok = ts_configured() ? 0xA5 : 0; b->ts_auto = (u8)ts_auto(); b->ts_tz = (u8)(ts_tz() / 15 + 64);
+    b->lg_ok = 0xA5; b->lg_ui = (u8)lang_get(); b->lg_kb = (u8)kbd_layout();
     { int p, a, m; bat_get_config(&p, &a, &m); b->bat_ok = 0xA5; b->bat_pct = (u8)(p < 0 ? 0xFF : p); b->bat_ac = (u8)(a < 0 ? 0xFF : a); b->bat_mask = (u8)m; }
     int on = 0; wifi_pref_get(b->ssid, b->pass, &on); b->wifi_on = (u8)on;
 }
@@ -103,6 +107,7 @@ static void apply(const blob_t *b)
     icon_set_style(b->icon_style);
     avatar_set(b->avatar); avatar_set_color(b->avatar_bg);
     if (b->bat_ok == 0xA5) bat_config(b->bat_pct == 0xFF ? -1 : b->bat_pct, b->bat_ac == 0xFF ? -1 : b->bat_ac, b->bat_mask);
+    if (b->lg_ok == 0xA5) { lang_set(b->lg_ui); kbd_set_layout(b->lg_kb); }
     if (b->ts_ok == 0xA5) ts_load((b->ts_tz - 64) * 15, b->ts_auto);
     if (b->tp_ok == 0xA5) ps2_tp_set(b->tp_speed, b->tp_tap, b->tp_nat);
     char ss[33], pp[64]; int i;

@@ -1,0 +1,102 @@
+/* Язык интерфейса: таблица перевода английских строк оболочки на русский (UTF-8). */
+#include "lang.h"
+
+static int cur_lang;
+int  lang_get(void) { return cur_lang; }
+void lang_set(int l) { cur_lang = l == 1; }
+
+static const char *const T[][2] = {
+    { "File", "Файл" },
+    { "Edit", "Правка" },
+    { "View", "Вид" },
+    { "Window", "Окно" },
+    { "Help", "Справка" },
+    { "Files", "Файлы" },
+    { "Terminal", "Терминал" },
+    { "Settings", "Настройки" },
+    { "Snake", "Змейка" },
+    { "About", "О системе" },
+    { "Calculator", "Калькулятор" },
+    { "Notes", "Заметки" },
+    { "Clock", "Часы" },
+    { "Calendar", "Календарь" },
+    { "Music", "Музыка" },
+    { "TextEdit", "Текст" },
+    { "Preview", "Просмотр" },
+    { "Launchpad", "Launchpad" },
+    { "Trash", "Корзина" },
+    { "Wallpaper", "Обои" },
+    { "Photos", "Фото" },
+    { "Appearance", "Оформление" },
+    { "Liquid Glass", "Жидкое стекло" },
+    { "Icons", "Значки" },
+    { "Displays", "Дисплеи" },
+    { "Sound", "Звук" },
+    { "Trackpad", "Трекпад" },
+    { "Wi-Fi", "Wi-Fi" },
+    { "Date & Time", "Дата и время" },
+    { "Language & Region", "Язык и регион" },
+    { "Software Update", "Обновление ПО" },
+    { "Account", "Учётная запись" },
+    { "Search", "Поиск" },
+    { "No Results", "Нет результатов" },
+    { "Set the clock, the time zone and automatic sync", "Часы, часовой пояс и автосинхронизация" },
+    { "Current time", "Текущее время" },
+    { "Time zone", "Часовой пояс" },
+    { "Set automatically", "Устанавливать автоматически" },
+    { "Sync now", "Синхронизировать" },
+    { "Syncing...", "Синхронизация..." },
+    { "Set manually", "Установить вручную" },
+    { "Day", "День" },
+    { "Month", "Месяц" },
+    { "Year", "Год" },
+    { "Hour", "Час" },
+    { "Min", "Мин" },
+    { "Set", "Задать" },
+    { "Interface language", "Язык интерфейса" },
+    { "Keyboard layout at startup", "Раскладка при запуске" },
+    { "English", "English" },
+    { "Русский", "Русский" },
+    { "English (US)", "Английская (US)" },
+    { "Russian (JCUKEN)", "Русская (ЙЦУКЕН)" },
+    { "Language of menus, apps and Settings", "Язык меню, приложений и настроек" },
+    { "Switch the layout any time: Alt+Shift or Win+Space.", "Переключение в любой момент: Alt+Shift или Win+Пробел." },
+    { "Back", "Назад" },
+    { "Forward", "Вперёд" },
+    { "Open", "Открыть" },
+    { "Quit", "Выйти" },
+    { "Lock Screen", "Заблокировать экран" },
+    { "Restart", "Перезагрузка" },
+    { "Shut Down", "Выключить" },
+    { "About EndixOS PC", "Об EndixOS PC" },
+    { "System Settings...", "Системные настройки..." },
+    { "Install EndixOS...", "Установить EndixOS..." },
+    { "Restart...", "Перезагрузить..." },
+    { "Shut Down...", "Выключить..." },
+    { "Hide", "Скрыть" },
+    { "Open Files", "Открыть Файлы" },
+    { "Open Terminal", "Открыть Терминал" },
+    { "New Folder", "Новая папка" },
+    { "Close Window", "Закрыть окно" },
+    { "Empty Trash", "Очистить корзину" },
+    { "Undo", "Отменить" },
+    { "Redo", "Повторить" },
+    { "Cut", "Вырезать" },
+    { "Copy", "Скопировать" },
+    { "Paste", "Вставить" },
+    { "Select All", "Выбрать всё" },
+    { "Minimize", "Свернуть" },
+    { "Zoom", "Масштаб" },
+    { "Mission Control", "Mission Control" },
+    { "EndixOS Help", "Справка EndixOS" },
+};
+
+static int same(const char *a, const char *b) { while (*a && *a == *b) { a++; b++; } return *a == *b; }
+
+const char *tr(const char *en)
+{
+    if (!cur_lang || !en) return en;
+    for (unsigned i = 0; i < sizeof T / sizeof T[0]; i++)
+        if (same(en, T[i][0])) return T[i][1];
+    return en;
+}
