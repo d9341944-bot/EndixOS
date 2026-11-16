@@ -34,6 +34,8 @@ __attribute__((weak)) u32 pci_read32(u32 bus, u32 dev, u32 fn, u32 off) { (void)
 #include "mission.h"
 #include "font.h"
 #include "lang.h"
+#include "perf.h"
+#include "../drivers/pit.h"
 #include "theme.h"
 #include "control.h"
 #include "logo.h"
@@ -3181,6 +3183,7 @@ static void lock_now(void)
     } else notify("Lock Screen", "Install EndixOS to create a user first.");
 }
 
+__attribute__((weak)) u32 pit_ticks(void) { return 0; }
 __attribute__((weak)) int kbd_layout(void) { return 0; }
 __attribute__((weak)) void kbd_set_layout(int ru) { (void)ru; }
 

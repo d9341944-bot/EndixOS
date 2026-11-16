@@ -639,6 +639,16 @@ static void cmd_usb(char *arg)
     char b[16]; u_put(b, usb_drive_count()); term_puts("storage devices: "); term_puts(b); term_puts("\n");
 }
 
+static void cmd_perf(void)                                        /* замеры скорости на реальном железе */
+{
+    char b[16];
+    static const char *const lv[3] = { "full quality", "no shadows, light blur", "no glass blur" };
+    term_puts("frame time:   "); u_put(b, (u32)perf_frame_ms()); term_puts(b); term_puts(" ms (smoothed, scene frames)\n");
+    int l = perf_level(); term_puts("quality level: "); u_put(b, (u32)l); term_puts(b); term_puts(" - "); term_puts(lv[l < 0 ? 0 : l > 2 ? 2 : l]); term_puts("\n");
+    term_puts("video writes: "); u_put(b, fb_flipped_bytes() >> 20); term_puts(b); term_puts(" MB since boot\n");
+    term_puts("uptime:       "); u_put(b, pit_ticks() / 100); term_puts(b); term_puts(" s\n");
+}
+
 static void cmd_lspci(void)
 {
     static const char hx[] = "0123456789abcdef";
@@ -801,7 +811,7 @@ static const cmd_info_t cmd_table[] = {
     { "free", "free" }, { "df", "df" }, { "ps", "ps" }, { "top", "top" }, { "kill", "kill name|pid" },
     { "whoami", "whoami" }, { "hostname", "hostname" }, { "sw_vers", "sw_vers" }, { "history", "history" },
     { "open", "open files|terminal|settings|snake|about|launchpad|mission" }, { "snake", "snake" },
-    { "usb", "usb [ls [path]]  (USB 2.0 flash drives: scan; ls lists a FAT32 stick)" }, { "disks", "disks  (SATA disks and their partitions, read only)" }, { "install", "install  (graphical installer: erases a disk!)" }, { "lock", "lock  (show the login screen)" }, { "lspci", "lspci  (list PCI devices: vendor:device class)" }, { "nicinfo", "nicinfo  (JMicron Ethernet diagnostics)" }, { "wifi", "wifi [on|fw|phy|stat|fwinstall]  (Realtek RTL8188CE Wi-Fi: detect, power on, firmware, radio tables)" }, { "ec", "ec [snap|diff]  (256 EC bytes; snap remembers them, diff shows what changed since)" }, { "battery", "battery [set PCT [AC MASK]|off]  (EC offsets in hex, e.g. battery set 7A 7B 01)" }, { "touchpad", "touchpad  (touchpad status and counters)" }, { "audio", "audio [test]  (HD Audio status; test plays the startup sound)" }, { "ifconfig", "ifconfig" }, { "ping", "ping [-c N] host  (Ctrl+C stops)" }, { "nslookup", "nslookup host" }, { "curl", "curl [-i] http://host/path  (Ctrl+C stops; no HTTPS yet)" },
+    { "perf", "perf  (frame time, quality level, video writes: real-hardware speed check)" }, { "usb", "usb [ls [path]]  (USB 2.0 flash drives: scan; ls lists a FAT32 stick)" }, { "disks", "disks  (SATA disks and their partitions, read only)" }, { "install", "install  (graphical installer: erases a disk!)" }, { "lock", "lock  (show the login screen)" }, { "lspci", "lspci  (list PCI devices: vendor:device class)" }, { "nicinfo", "nicinfo  (JMicron Ethernet diagnostics)" }, { "wifi", "wifi [on|fw|phy|stat|fwinstall]  (Realtek RTL8188CE Wi-Fi: detect, power on, firmware, radio tables)" }, { "ec", "ec [snap|diff]  (256 EC bytes; snap remembers them, diff shows what changed since)" }, { "battery", "battery [set PCT [AC MASK]|off]  (EC offsets in hex, e.g. battery set 7A 7B 01)" }, { "touchpad", "touchpad  (touchpad status and counters)" }, { "audio", "audio [test]  (HD Audio status; test plays the startup sound)" }, { "ifconfig", "ifconfig" }, { "ping", "ping [-c N] host  (Ctrl+C stops)" }, { "nslookup", "nslookup host" }, { "curl", "curl [-i] http://host/path  (Ctrl+C stops; no HTTPS yet)" },
     { "files", "files" }, { "wallpaper", "wallpaper N" }, { "theme", "theme light|dark" },
     { "accent", "accent purple|blue|green|..." }, { "dock", "dock hide off|auto|smart | zoom N | magnify on|off" },
     { "notify", "notify text" }, { "spotlight", "spotlight" }, { "cmatrix", "cmatrix (q to quit)" }, { "cowsay", "cowsay text" }, { "fortune", "fortune" },
@@ -919,6 +929,7 @@ static int term_ext_cmd(const char *cmd, char *arg)
     else if (s_eq(cmd, "touchpad")) { char tb[200]; ps2_tp_diag(tb, (int)sizeof tb); term_puts(tb); term_puts("\n"); }
     else if (s_eq(cmd, "audio")) { char ab[160]; hda_diag(ab, (int)sizeof ab); term_puts(ab[0] ? ab : "HD Audio: driver not linked\n"); if (s_eq(arg, "test")) hda_play_chime(); }
     else if (s_eq(cmd, "disks")) cmd_disks();
+    else if (s_eq(cmd, "perf")) cmd_perf();
     else if (s_eq(cmd, "usb")) cmd_usb(arg);
     else if (s_eq(cmd, "install")) { installer_open(); scene_dirty = 1; }
     else if (s_eq(cmd, "ping")) cmd_ping(arg);

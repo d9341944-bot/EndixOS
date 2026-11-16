@@ -1,5 +1,5 @@
-build=42
-version=8.7
-size=3345096
-notes=Быстрее HTTPS и обновления (шифрование в 6 раз быстрее)|Быстрее загрузка
-sha256=12fa33bff3df08b494e02238bfe18fb6e16a34b0c5dce3fee4812c9947188e49
+build=43
+version=8.8
+size=3345148
+notes=Команда perf: замеры скорости|Быстрее HTTPS и обновления
+sha256=bdc68dc26636cc1c7116a301b1ca9b3c8e7147d52ec8367e119c541e0bcca28c
