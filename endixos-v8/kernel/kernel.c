@@ -175,18 +175,18 @@ void kernel_main(u32 magic, multiboot_info_t *mbi)
     serial_puts("Desktop up, entering main loop\n");
 
     __asm__ volatile("sti");
-    {   /* доводим полосу до конца (около 0,7 с), потом рабочий стол проявляется из чёрного */
+    {   /* доводим полосу до конца (около 0,35 с), потом рабочий стол проявляется из чёрного */
         u32 t0 = pit_ticks();
         int lastpc = 85;
-        while ((i32)(pit_ticks() - t0) < 70) { int pc = 85 + (int)(pit_ticks() - t0) * 15 / 70; if (pc != lastpc) { lastpc = pc; splash_draw(pc); } }
+        while ((i32)(pit_ticks() - t0) < 35) { int pc = 85 + (int)(pit_ticks() - t0) * 15 / 35; if (pc != lastpc) { lastpc = pc; splash_draw(pc); } }
         for (int a = 255; a >= 0; a -= 64) { wm_render(); fb_blend_rect(0, 0, (i32)fb_width(), (i32)fb_height(), RGB(0, 0, 0), (u32)a); fb_flip(); }
         wm_render(); fb_flip();
     }
 
     {   /* сколько тактов в тике PIT: нужно, чтобы замерять время кадра на любом процессоре */
         u32 t0 = pit_ticks(); while (pit_ticks() == t0) { }
-        u32 c0 = rdtsc_lo(); t0 = pit_ticks(); while ((i32)(pit_ticks() - t0) < 5) { }
-        perf_init((rdtsc_lo() - c0) / 5);
+        u32 c0 = rdtsc_lo(); t0 = pit_ticks(); while ((i32)(pit_ticks() - t0) < 3) { }
+        perf_init((rdtsc_lo() - c0) / 3);
     }
     u32 next_second = pit_ticks() + PIT_HZ;
     int last_vol = -1;

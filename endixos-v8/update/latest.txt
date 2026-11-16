@@ -1,5 +1,5 @@
-build=40
-version=8.5
+build=41
+version=8.6
 size=3345012
-notes=Курсор не мигает при кликах|Быстрее отрисовка
-sha256=f143e0032ebeaf95a781b0c2994eeed95535e3dba47aa90bdd44e65d7396256a
+notes=Быстрее загрузка|Курсор не мигает|Быстрее отрисовка
+sha256=9e65aa09d3c9769a636a9caf4ebf78998f23e2fd51fcde1b07054d7f453e390b
