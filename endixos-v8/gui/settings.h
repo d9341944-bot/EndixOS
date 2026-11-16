@@ -28,7 +28,7 @@ int  settings_animating(void);     /* 1 - окну нужны кадры (идё
 void settings_show_page(int p);     /* 0 Wallpaper, 1 Appearance, 2 Liquid Glass */
 
 
-#define ENDIX_VERSION "8.2"
-#define ENDIX_BUILD 44                 /* растёт с каждым выпуском; сравнивается с build= в update/latest.txt */
+#define ENDIX_VERSION "8.3"
+#define ENDIX_BUILD 45                 /* растёт с каждым выпуском; сравнивается с build= в update/latest.txt */
 
 #endif

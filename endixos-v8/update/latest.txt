@@ -1,5 +1,5 @@
-build=44
-version=8.9
+build=45
+version=8.3
 size=3349504
-notes=Wi-Fi запоминает сети и переподключается сам|Команда perf
-sha256=c724b631006acc0b56408ad7dbed01e6145b1cf1dc9047425825d70539c2c57d
+notes=Версия 8.3|Wi-Fi запоминает сети и переподключается сам
+sha256=52a5106913814176465213be3e81d9abab94d55d986a5b4fe578498a41e39eaa
