@@ -933,18 +933,15 @@ int files_key(i32 key, int ctrl)
                 rlen = 0;
                 rfresh = 0;
             } else if (rlen > 0) {
-                rlen--;
+                rlen = utf8_prev(rbuf, rlen);
             }
             rbuf[rlen] = 0;
-        } else if (key >= 32 && key < 127 && key != '/') {
+        } else if (is_text_cp(key) && key != '/') {
             if (rfresh) {
                 rlen = 0;
                 rfresh = 0;
             }
-            if (rlen < FS_NAME_MAX - 1) {
-                rbuf[rlen++] = (char)key;
-                rbuf[rlen] = 0;
-            }
+            utf8_append(rbuf, &rlen, FS_NAME_MAX - 1, key);
             msg[0] = 0;
         }
         return 1;

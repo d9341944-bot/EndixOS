@@ -323,3 +323,10 @@ Put JPEG/PNG files into the folder `Pictures` in the root of the SATA disk's FAT
 - gui/timeset.c: синхронизация берёт заголовок `Date:` из HTTPS-ответа (raw.githubusercontent.com, kernel/net.c: net_fetch_date), переводит UTC в местное по выбранному поясу и пишет в CMOS (drivers/rtc.c: rtc_write). Автосинхронизация при включении: после 8 с и когда есть сеть, до 4 попыток; по умолчанию выключена (пока пояс не выбран, время UTC было бы неверным).
 - Пояс и переключатель хранятся в настройках (prefs: ts_ok/ts_auto/ts_tz). Сертификаты TLS по дате не проверяются, поэтому работает и при неверных часах.
 - tools/tests/tstest.c: разбор Date, переходы через год и високосный день, ручная установка и неверные значения, клики по странице.
+
+## Русская раскладка (build 37)
+- drivers/ps2.c: раскладка ЙЦУКЕН (kbd_layout/kbd_set_layout), переключение Alt+Shift или Win+Пробел; Caps/Shift дают заглавные, Ctrl+буква остаётся латиницей (шорткаты работают). Клавиатура шлёт кодпоинты Юникода (0x410–0x44F, Ё/ё); № заменён на #, его нет в шрифте.
+- Меню-бар показывает EN/RU (событие KEY_LAYOUT).
+- UTF-8 в редакторах: gui/font.h (utf8_put/clen/prev/cp/append/pop, is_text_cp). Русский ввод: Notes, TextEdit, Spotlight, Launchpad, поиск в Settings, переименование в Files, адресная строка Browix (поиск кодирует байты в %XX).
+- Пароли (вход, установщик, Wi-Fi) и терминал остались ASCII. Поиск без учёта регистра пока только для латиницы.
+- Тесты: tools/tests/rukbd.c, rutest.c.

@@ -112,8 +112,8 @@ static void sp_key(i32 c)
     if (c == '\n') { sp_run(sp_sel); return; }
     if (c == KEY_UP) { if (sp_n) sp_sel = (sp_sel + sp_n - 1) % sp_n; return; }
     if (c == KEY_DOWN) { if (sp_n) sp_sel = (sp_sel + 1) % sp_n; return; }
-    if (c == '\b') { if (sp_qn) { sp_q[--sp_qn] = 0; sp_search(); } return; }
-    if (c >= 32 && c < 127 && sp_qn < 38) { sp_q[sp_qn++] = (char)c; sp_q[sp_qn] = 0; sp_search(); }
+    if (c == '\b') { if (sp_qn) { utf8_pop(sp_q, &sp_qn); sp_search(); } return; }
+    if (is_text_cp(c) && utf8_append(sp_q, &sp_qn, 38, c)) sp_search();
 }
 
 static i32 sp_x(void) { return ((i32)fb_width() - SP_W) / 2; }

@@ -579,12 +579,14 @@ static void begin_edit(void)
     ed_n = (int)slen(ed); ed_pos = ed_n;
 }
 
-static void ed_insert(char c)
+static void ed_insert(int cp)
 {
+    char b[3]; int k = utf8_put(b, cp);
     if (sel_all) { ed_n = 0; ed_pos = 0; ed[0] = 0; sel_all = 0; }
-    if (ed_n >= URLMAX) return;
-    for (int i = ed_n; i >= ed_pos; i--) ed[i + 1] = ed[i];
-    ed[ed_pos++] = c; ed_n++;
+    if (ed_n + k > URLMAX) return;
+    for (int i = ed_n; i >= ed_pos; i--) ed[i + k] = ed[i];
+    for (int i = 0; i < k; i++) ed[ed_pos + i] = b[i];
+    ed_pos += k; ed_n += k;
 }
 
 static int in_scrollbar(i32 rx, i32 ry)
@@ -664,17 +666,17 @@ int browser_key(i32 c, i32 ctrl)
         if (c == 27) { editing = 0; return 1; }
         if (c == '\b') {
             if (sel_all) { ed_n = 0; ed_pos = 0; ed[0] = 0; sel_all = 0; }
-            else if (ed_pos > 0) { for (int i = ed_pos; i <= ed_n; i++) ed[i - 1] = ed[i]; ed_pos--; ed_n--; }
+            else if (ed_pos > 0) { int k = ed_pos - utf8_prev(ed, ed_pos); for (int i = ed_pos; i <= ed_n; i++) ed[i - k] = ed[i]; ed_pos -= k; ed_n -= k; }
             return 1;
         }
-        if (c == KEY_DELETE) { if (ed_pos < ed_n) { for (int i = ed_pos; i < ed_n; i++) ed[i] = ed[i + 1]; ed_n--; } sel_all = 0; return 1; }
-        if (c == KEY_LEFT) { if (sel_all) { sel_all = 0; ed_pos = 0; } else if (ed_pos > 0) ed_pos--; return 1; }
-        if (c == KEY_RIGHT) { if (sel_all) { sel_all = 0; ed_pos = ed_n; } else if (ed_pos < ed_n) ed_pos++; return 1; }
+        if (c == KEY_DELETE) { if (ed_pos < ed_n) { int k = utf8_clen(&ed[ed_pos]); for (int i = ed_pos; i + k <= ed_n; i++) ed[i] = ed[i + k]; ed_n -= k; } sel_all = 0; return 1; }
+        if (c == KEY_LEFT) { if (sel_all) { sel_all = 0; ed_pos = 0; } else if (ed_pos > 0) ed_pos = utf8_prev(ed, ed_pos); return 1; }
+        if (c == KEY_RIGHT) { if (sel_all) { sel_all = 0; ed_pos = ed_n; } else if (ed_pos < ed_n) ed_pos += utf8_clen(&ed[ed_pos]); return 1; }
         if (c == KEY_HOME) { sel_all = 0; ed_pos = 0; return 1; }
         if (c == KEY_END) { sel_all = 0; ed_pos = ed_n; return 1; }
         if (ctrl && (c == 'a' || c == 'A')) { sel_all = 1; return 1; }
         if (ctrl && (c == 'u' || c == 'U')) { ed_n = 0; ed_pos = 0; ed[0] = 0; sel_all = 0; return 1; }
-        if (!ctrl && c >= 32 && c < 127) { ed_insert((char)c); return 1; }
+        if (!ctrl && is_text_cp(c)) { ed_insert(c); return 1; }
         return 0;
     }
     if (ctrl) {

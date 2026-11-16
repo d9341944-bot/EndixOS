@@ -1,5 +1,5 @@
-build=36
+build=37
 version=8.2
-size=3311816
-notes=Настройка даты и времени, синхронизация по интернету
-sha256=0bef090fcbe0cf9762cdfcc64b8ebfd0c4af79b66c6d43a34d912a831f6e6207
+size=3311984
+notes=Русская раскладка (Alt+Shift)|Русский ввод в Заметках, Spotlight, Browix, Files
+sha256=d6fd81f4b87b5ebc17435d3bdc05116c2cbaca94d86ff5d9f85620ce2ca2b0dc

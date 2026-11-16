@@ -15,4 +15,8 @@ void ps2_tp_set(int speed, int tap, int natural);        /* скорость 0..
 void ps2_tp_get(int *speed, int *tap, int *natural);
 void ps2_tp_diag(char *out, int cap);                    /* текст для команды touchpad */
 
+/* Раскладка клавиатуры: 0 = EN (US), 1 = RU (ЙЦУКЕН). Alt+Shift или Win+Пробел переключают. */
+int  kbd_layout(void);
+void kbd_set_layout(int ru);
+
 #endif

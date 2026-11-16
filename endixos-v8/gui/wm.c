@@ -2228,6 +2228,12 @@ static void draw_menubar(void)
     cc_draw_search_icon(cc_icon_x() - 30, 3, ink);
     if (bat_width()) bat_draw(cc_icon_x() - 46 - bat_width(), 0, ink);
     if (sp_on) fb_fill_round_rect(cc_icon_x() - 36, 2, 26, MENUBAR_H - 5, 5, ink, 50);
+    {                                                    /* индикатор раскладки */
+        const char *lay = kbd_layout() ? "RU" : "EN";
+        i32 lw = font_width(lay, FONT_BOLD);
+        i32 lx = (bat_width() ? cc_icon_x() - 46 - bat_width() : cc_icon_x() - 30) - 12 - lw;
+        font_draw(lx, 3, lay, ink, FONT_BOLD);
+    }
 }
 
 
@@ -2356,10 +2362,9 @@ static void lp_key(i32 c)
         return;
     }
     if (c == '\b') {
-        if (lp_qn) lp_q[--lp_qn] = 0;
-    } else if (c >= 32 && c < 127 && lp_qn < 22) {
-        lp_q[lp_qn++] = (char)c;
-        lp_q[lp_qn] = 0;
+        if (lp_qn) utf8_pop(lp_q, &lp_qn);
+    } else if (is_text_cp(c)) {
+        utf8_append(lp_q, &lp_qn, 22, c);
     }
 }
 
@@ -3175,9 +3180,12 @@ static void lock_now(void)
     } else notify("Lock Screen", "Install EndixOS to create a user first.");
 }
 
+__attribute__((weak)) int kbd_layout(void) { return 0; }
+
 void wm_handle_event(const event_t *e)
 {
     sync_sizes();
+    if (e->type == EV_KEY && e->a == KEY_LAYOUT) { scene_dirty = 1; return; }      /* Alt+Shift: сменилась раскладка */
     if (e->type == EV_KEY && e->a == KEY_LOCK && !login_active() && !installer_active()) {      /* Win+L */
         lock_now();
         return;

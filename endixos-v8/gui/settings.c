@@ -1155,12 +1155,12 @@ int settings_key(i32 key)
     if (page == PAGE_WIFI && wifi_page_key(key)) return 1;
     if (!sq_focus) return 0;
     if (key == 27) { sqn = 0; sq[0] = 0; sq_focus = 0; }
-    else if (key == '\b') { if (sqn) sq[--sqn] = 0; }
+    else if (key == '\b') { if (sqn) utf8_pop(sq, &sqn); }
     else if (key == '\n') {
         int vp[PAGE_COUNT], nv = vis_pages(vp);
         if (nv) page = vp[0];
         sq_focus = 0;
-    } else if (key >= 32 && key < 127 && sqn < (int)sizeof(sq) - 1) { sq[sqn++] = (char)key; sq[sqn] = 0; }
+    } else if (is_text_cp(key)) { utf8_append(sq, &sqn, (int)sizeof(sq) - 1, key); }
     else return 0;
     return 1;
 }

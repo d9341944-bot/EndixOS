@@ -21,6 +21,7 @@
 #define KEY_HOME   0x10A
 #define KEY_END    0x10B
 #define KEY_LOCK   0x10C   /* Win+L */
+#define KEY_LAYOUT 0x10D   /* сменилась раскладка (EN/RU), перерисовать индикатор */
 
 typedef struct {
     int type;

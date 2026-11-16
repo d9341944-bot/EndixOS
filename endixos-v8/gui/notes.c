@@ -30,7 +30,7 @@ typedef struct {
 static ed_t NT = { .view_w = 520, .view_h = 400, .node = -1 }, TE = { .view_w = 560, .view_h = 400, .node = -1, .te = 1 };
 static ed_t *E = &NT;
 static u32 now_t;
-static i32 adv[128];
+static i32 adv[200];
 #define txt (E->txt)
 #define len (E->len)
 #define cur (E->cur)
@@ -46,11 +46,15 @@ static i32 adv[128];
 #define lstart (E->lstart)
 #define nl (E->nl)
 
-static i32 cw(char c)
+static i32 cw(const char *p)                 /* ширина символа (ASCII или кириллица UTF-8) */
 {
-    unsigned u = (unsigned char)c;
-    if (u >= 128) u = '?';
-    if (!adv[u]) { char s[2] = { (char)u, 0 }; adv[u] = font_width(s, FONT_REGULAR); if (adv[u] <= 0) adv[u] = 4; }
+    int cp = utf8_cp(p), u;
+    if (cp < 128) u = cp;
+    else if (cp >= 0x410 && cp <= 0x44F) u = 128 + (cp - 0x410);
+    else if (cp == 0x401) u = 192;
+    else if (cp == 0x451) u = 193;
+    else { cp = '?'; u = '?'; }
+    if (!adv[u]) { char s[3]; int n = utf8_put(s, cp); s[n] = 0; adv[u] = font_width(s, FONT_REGULAR); if (adv[u] <= 0) adv[u] = 4; }
     return adv[u];
 }
 
@@ -60,15 +64,15 @@ static void layout(void)                     /* начала строк с пе�
     nl = 0; lstart[nl++] = 0;
     i32 x = 0; int lastsp = -1, i = 0;
     while (i < len && nl < MAXL - 1) {
-        char c = txt[i];
+        char c = txt[i]; int n = utf8_clen(&txt[i]);
         if (c == '\n') { lstart[nl++] = i + 1; x = 0; lastsp = -1; i++; continue; }
-        i32 a = cw(c);
+        i32 a = cw(&txt[i]);
         if (x + a > maxw && i > lstart[nl - 1]) {
             int br = (lastsp > lstart[nl - 1]) ? lastsp + 1 : i;
             lstart[nl++] = br; i = br; x = 0; lastsp = -1; continue;
         }
         if (c == ' ') lastsp = i;
-        x += a; i++;
+        x += a; i += n;
     }
 }
 
@@ -88,7 +92,7 @@ static int lim(int l)                       /* позиция конца тек�
 static i32 x_of(int l, int pos)
 {
     i32 x = 0;
-    for (int i = lstart[l]; i < pos && i < len; i++) x += txt[i] == '\n' ? 0 : cw(txt[i]);
+    for (int i = lstart[l]; i < pos && i < len; i += utf8_clen(&txt[i])) x += txt[i] == '\n' ? 0 : cw(&txt[i]);
     return x;
 }
 
@@ -96,9 +100,9 @@ static int pos_at(int l, i32 px)              /* ближайшая позици
 {
     int s = lstart[l], e = lim(l);
     i32 x = 0;
-    for (int i = s; i < e; i++) {
+    for (int i = s; i < e; i += utf8_clen(&txt[i])) {
         if (txt[i] == '\n') return i;
-        i32 a = cw(txt[i]);
+        i32 a = cw(&txt[i]);
         if (px < x + a / 2) return i;
         x += a;
     }
@@ -169,19 +173,23 @@ void notes_init(void)
     txt[len] = 0; cur = len; loaded = 1; layout(); ensure_visible();
 }
 
-static void insert(char c)
+static void insert(int cp)
 {
-    if (len >= MAXT) return;
-    for (int i = len; i > cur; i--) txt[i] = txt[i - 1];
-    txt[cur++] = c; len++; txt[len] = 0;
+    char b[3]; int n = utf8_put(b, cp);
+    if (len + n > MAXT) return;
+    for (int i = len + n - 1; i >= cur + n; i--) txt[i] = txt[i - n];
+    for (int k = 0; k < n; k++) txt[cur + k] = b[k];
+    cur += n; len += n; txt[len] = 0;
     touch();
 }
 
-static void erase(int pos)
+static void erase(int pos)                  /* удаляет символ, начинающийся в pos */
 {
     if (pos < 0 || pos >= len) return;
-    for (int i = pos; i < len; i++) txt[i] = txt[i + 1];
-    len--; if (cur > pos) cur--;
+    int n = utf8_clen(&txt[pos]);
+    for (int i = pos; i + n <= len; i++) txt[i] = txt[i + n];
+    len -= n; if (cur > pos) cur = cur - n < pos ? pos : cur - n;
+    txt[len] = 0;
     touch();
 }
 
@@ -193,16 +201,16 @@ static int ed_key(i32 k, int ctrl)
     }
     int l = line_of(cur);
     if (k == '\n' || k == '\r') insert('\n');
-    else if (k == '\b') erase(cur - 1);
+    else if (k == '\b') erase(utf8_prev(txt, cur));
     else if (k == KEY_DELETE) erase(cur);
-    else if (k == KEY_LEFT) { if (cur > 0) cur--; blink = 1; blink_t = now_t; }
-    else if (k == KEY_RIGHT) { if (cur < len) cur++; blink = 1; blink_t = now_t; }
+    else if (k == KEY_LEFT) { if (cur > 0) cur = utf8_prev(txt, cur); blink = 1; blink_t = now_t; }
+    else if (k == KEY_RIGHT) { if (cur < len) cur += utf8_clen(&txt[cur]); blink = 1; blink_t = now_t; }
     else if (k == KEY_UP) { if (l > 0) cur = pos_at(l - 1, x_of(l, cur)); else cur = 0; blink = 1; }
     else if (k == KEY_DOWN) { if (l + 1 < nl) cur = pos_at(l + 1, x_of(l, cur)); else cur = len; blink = 1; }
     else if (k == KEY_HOME) cur = lstart[l];
     else if (k == KEY_END) cur = lim(l);
     else if (k == '\t') { insert(' '); insert(' '); }
-    else if (k >= 32 && k < 127) insert((char)k);
+    else if (is_text_cp(k)) insert(k);
     else return 0;
     ensure_visible();
     return 1;
@@ -251,12 +259,13 @@ static void ed_draw(i32 x, i32 y, i32 w, i32 h)
         if (l >= nl) break;
         i32 ly = y + HEAD + 8 + r * LH, lx = x + PADX;
         int e = lim(l);
-        for (int i = lstart[l]; i < e; i++) {
+        for (int i = lstart[l]; i < e; i += utf8_clen(&txt[i])) {
             if (txt[i] == '\n') break;
-            char c[2] = { txt[i], 0 };
-            if ((unsigned char)c[0] < 32 || (unsigned char)c[0] > 126) c[0] = '?';
+            char c[3] = { txt[i], 0, 0 };
+            if (utf8_clen(&txt[i]) == 2) c[1] = txt[i + 1];
+            else if ((unsigned char)c[0] < 32 || (unsigned char)c[0] > 126) c[0] = '?';
             if (c[0] != ' ') font_draw(lx, ly, c, t->text, FONT_REGULAR);
-            lx += cw(txt[i]);
+            lx += cw(&txt[i]);
         }
     }
     int cl = line_of(cur);

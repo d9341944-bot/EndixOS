@@ -172,7 +172,7 @@ Target hardware: an old netbook (Intel Atom, 2 GB RAM, BIOS/Legacy, 1024×600). 
 - [x] Files, Clock, Calendar, Music, TextEdit, Preview, Browix
 - [x] USB mass storage (first stage)
 - [ ] USB flash drive in Files
-- [ ] Russian keyboard layout and font
+- [x] Russian keyboard layout and font
 - [ ] Set date and time, sync over the network
 - [ ] USB keyboard, mouse and hubs
 - [ ] Working brightness keys

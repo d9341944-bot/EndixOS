@@ -234,7 +234,26 @@ static const char map_shift[58] =
     "\0\033" "!@#$%^&*()_+" "\b\t" "QWERTYUIOP{}" "\n" "\0" "ASDFGHJKL:\"~" "\0"
     "|" "ZXCVBNM<>?" "\0" "*" "\0" " ";
 
-static int k_shift, k_ctrl, k_caps, k_ext, k_win;
+/* Русская ЙЦУКЕН: кодпоинты Юникода по скан-коду (0 = как в US). Для букв хранится строчная. */
+static const unsigned short ru_map[58] = {
+    0, 0, '1','2','3','4','5','6','7','8','9','0','-','=', 0, 0,
+    L'й',L'ц',L'у',L'к',L'е',L'н',L'г',L'ш',L'щ',L'з',L'х',L'ъ', 0, 0,
+    L'ф',L'ы',L'в',L'а',L'п',L'р',L'о',L'л',L'д',L'ж',L'э', L'ё', 0,
+    '\\', L'я',L'ч',L'с',L'м',L'и',L'т',L'ь',L'б',L'ю','.', 0, '*', 0, ' '
+};
+static char ru_sym_shift(u8 sc)              /* Shift + небуквенная клавиша в RU (№ заменён на #: его нет в шрифте) */
+{
+    static const char dig[] = "!\"#;%:?*()_+";      /* скан-коды 0x02..0x0D */
+    if (sc >= 2 && sc <= 0x0D) return dig[sc - 2];
+    if (sc == 0x2B) return '/';
+    if (sc == 0x35) return ',';
+    return 0;
+}
+
+static int k_shift, k_ctrl, k_caps, k_ext, k_win, k_alt, k_ru;
+
+int kbd_layout(void) { return k_ru; }           /* 0 = EN, 1 = RU */
+void kbd_set_layout(int ru) { k_ru = ru != 0; event_push(EV_KEY, KEY_LAYOUT, 0, 0); }
 
 static void kbd_byte(u8 b)
 {
@@ -249,6 +268,11 @@ static void kbd_byte(u8 b)
         k_ext = 0;
         if (sc == 0x5B || sc == 0x5C) {   /* клавиша Win (Super) */
             k_win = !release;
+            return;
+        }
+        if (sc == 0x38) {                 /* правый Alt */
+            k_alt = !release;
+            if (!release && k_shift) kbd_set_layout(!k_ru);
             return;
         }
         if (sc == 0x1D) {                 /* правый Ctrl */
@@ -272,7 +296,12 @@ static void kbd_byte(u8 b)
         return;
     }
 
-    if (sc == 0x2A || sc == 0x36) { k_shift = !release; return; }
+    if (sc == 0x2A || sc == 0x36) {
+        k_shift = !release;
+        if (!release && k_alt) kbd_set_layout(!k_ru);     /* Alt+Shift: EN <-> RU */
+        return;
+    }
+    if (sc == 0x38) { k_alt = !release; if (!release && k_shift) kbd_set_layout(!k_ru); return; }
     if (sc == 0x1D)               { k_ctrl  = !release; return; }
     if (release)
         return;
@@ -281,6 +310,7 @@ static void kbd_byte(u8 b)
         event_push(EV_KEY, KEY_LOCK, 0, 0);
         return;
     }
+    if (k_win && sc == 0x39) { kbd_set_layout(!k_ru); return; }   /* Win+Пробел */
     if (sc == 0x3C) {                     /* F2 */
         event_push(EV_KEY, KEY_F2, k_ctrl, 0);
         return;
@@ -292,6 +322,15 @@ static void kbd_byte(u8 b)
     if (sc >= sizeof(map_normal))
         return;
 
+    if (k_ru && !k_ctrl && !k_alt && ru_map[sc]) {
+        int cp = ru_map[sc];
+        if (cp >= 0x430) {                              /* буква: Shift или Caps -> заглавная */
+            if (k_shift ^ k_caps) cp = cp == 0x451 ? 0x401 : cp - 32;
+        } else if (k_shift && ru_sym_shift(sc)) cp = (u8)ru_sym_shift(sc);
+        else if (k_shift && sc == 0x29) cp = 0x401;
+        event_push(EV_KEY, cp, 0, 0);
+        return;
+    }
     char c = map_normal[sc];
     if (c >= 'a' && c <= 'z') {
         if (k_shift ^ k_caps)
