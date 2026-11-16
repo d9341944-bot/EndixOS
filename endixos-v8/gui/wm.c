@@ -34,6 +34,7 @@ __attribute__((weak)) u32 pci_read32(u32 bus, u32 dev, u32 fn, u32 off) { (void)
 #include "mission.h"
 #include "font.h"
 #include "lang.h"
+#include "wifi.h"
 #include "perf.h"
 #include "../drivers/pit.h"
 #include "theme.h"
@@ -972,7 +973,7 @@ static void term_run_cmd(char *line)
         p = s_put(p, " MB\n");
         term_puts(buf);
     } else if (s_eq(line, "reboot")) {
-        sys_reboot();
+        prefs_flush(); sys_reboot();
     } else {
         term_cputs("endix: command not found: ", TC_RED);
         term_puts(line);
@@ -2133,6 +2134,7 @@ static void shutdown_now(void)
     font_draw((i32)fb_width() / 2 - font_width(m, FONT_REGULAR) / 2, (i32)fb_height() / 2, m,
               RGB(200, 200, 200), FONT_REGULAR);
     fb_flip();
+    prefs_flush();
     sys_shutdown();
 }
 
@@ -2143,7 +2145,7 @@ static void menu_exec(int id)
     case M_ABOUT:    open_window(APP_ABOUT); break;
     case M_SETTINGS: open_window(APP_SETTINGS); break;
     case M_INSTALL:  installer_open(); scene_dirty = 1; break;
-    case M_RESTART:  sys_reboot(); break;
+    case M_RESTART:  prefs_flush(); sys_reboot(); break;
     case M_SHUTDOWN: shutdown_now(); break;
     case M_QUIT:     if (top >= 0) close_window(top); break;
     case M_HIDE:     if (top >= 0) minimize_window(top); break;

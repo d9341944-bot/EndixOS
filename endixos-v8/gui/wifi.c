@@ -28,11 +28,53 @@ static char info[96];
 static int ord[STA_MAX_NETS], nord, sel_cur = -1, connected_once;
 static char sv_ssid[33], sv_pass[64], try_ssid[33], try_pass[64];   /* сохранённая сеть и сеть, к которой подключаемся */
 static int pref_on, boot_auto, auto_tried;
+#define KNOWN_EXTRA 3                                              /* ещё три запомненные сети кроме последней */
+static char kn_ssid[KNOWN_EXTRA][33], kn_pass[KNOWN_EXTRA][64];
+static unsigned retry_at; static int retries;                      /* повторные попытки входа в запомненную сеть */
+#define RETRY_TICKS 1500                                           /* 15 с между попытками */
+#define RETRY_MAX 12
+__attribute__((weak)) void prefs_flush(void) { }
 
 static void scp(char *d, const char *s, int cap) { int i = 0; while (s && s[i] && i < cap - 1) { d[i] = s[i]; i++; } d[i] = 0; }
 static int seq(const char *a, const char *b) { int i = 0; while (a[i] && a[i] == b[i]) i++; return a[i] == b[i]; }
 void wifi_pref_get(char *ssid, char *pass, int *on) { scp(ssid, sv_ssid, 33); scp(pass, sv_pass, 64); *on = pref_on; }
 void wifi_pref_set(const char *ssid, const char *pass, int on) { scp(sv_ssid, ssid, 33); scp(sv_pass, pass, 64); pref_on = on; boot_auto = on; }
+void wifi_known_get(int i, char *ssid, char *pass) { if (i < 0 || i >= KNOWN_EXTRA) { ssid[0] = pass[0] = 0; return; } scp(ssid, kn_ssid[i], 33); scp(pass, kn_pass[i], 64); }
+void wifi_known_set(int i, const char *ssid, const char *pass) { if (i >= 0 && i < KNOWN_EXTRA) { scp(kn_ssid[i], ssid, 33); scp(kn_pass[i], pass, 64); } }
+
+/* запомнить сеть: она встаёт на первое место, остальные сдвигаются (повтор имени убирается) */
+static void remember(const char *ssid, const char *pass)
+{
+    char os[KNOWN_EXTRA + 1][33], op[KNOWN_EXTRA + 1][64]; int n = 0;
+    scp(os[n], sv_ssid, 33); scp(op[n], sv_pass, 64); n++;
+    for (int i = 0; i < KNOWN_EXTRA; i++) { scp(os[n], kn_ssid[i], 33); scp(op[n], kn_pass[i], 64); n++; }
+    scp(sv_ssid, ssid, 33); scp(sv_pass, pass, 64);
+    int k = 0;
+    for (int i = 0; i < n && k < KNOWN_EXTRA; i++) {
+        if (!os[i][0] || seq(os[i], ssid)) continue;
+        scp(kn_ssid[k], os[i], 33); scp(kn_pass[k], op[i], 64); k++;
+    }
+    for (; k < KNOWN_EXTRA; k++) kn_ssid[k][0] = kn_pass[k][0] = 0;
+}
+
+static void forget(const char *ssid)                                /* убрать сеть из списка запомненных */
+{
+    char os[KNOWN_EXTRA][33], op[KNOWN_EXTRA][64]; int n = 0;
+    for (int i = 0; i < KNOWN_EXTRA; i++) if (kn_ssid[i][0] && !seq(kn_ssid[i], ssid)) { scp(os[n], kn_ssid[i], 33); scp(op[n], kn_pass[i], 64); n++; }
+    if (seq(sv_ssid, ssid)) {                                      /* забыли последнюю - на её место встаёт следующая */
+        if (n) { scp(sv_ssid, os[0], 33); scp(sv_pass, op[0], 64); for (int i = 1; i < n; i++) { scp(os[i - 1], os[i], 33); scp(op[i - 1], op[i], 64); } n--; }
+        else { sv_ssid[0] = sv_pass[0] = 0; }
+    }
+    for (int i = 0; i < KNOWN_EXTRA; i++) { if (i < n) { scp(kn_ssid[i], os[i], 33); scp(kn_pass[i], op[i], 64); } else kn_ssid[i][0] = kn_pass[i][0] = 0; }
+}
+
+/* пароль запомненной сети по имени или 0 */
+static const char *known_pass(const char *ssid)
+{
+    if (sv_ssid[0] && seq(sv_ssid, ssid)) return sv_pass;
+    for (int i = 0; i < KNOWN_EXTRA; i++) if (kn_ssid[i][0] && seq(kn_ssid[i], ssid)) return kn_pass[i];
+    return 0;
+}
 
 static const sta_radio_t radio = { rtlwifi_tx80211, rtlwifi_set_channel, rtlwifi_set_bssid, rtlwifi_set_link };
 
@@ -43,7 +85,8 @@ static void on_change(int s)
 {
     if (s == STA_CONNECTED) {
         net_init(mac, sta_send_eth); connected_once = 1;
-        if (try_ssid[0]) { scp(sv_ssid, try_ssid, 33); scp(sv_pass, try_pass, 64); }      /* запомнить сеть после удачного входа */
+        if (try_ssid[0]) { remember(try_ssid, try_pass); prefs_flush(); }      /* запомнить сеть после удачного входа и сразу записать на диск */
+        retries = 0;
     }
 }
 
@@ -93,14 +136,24 @@ void wifi_tick(unsigned now)
     if (!hw_ready || !rtlwifi_started()) return;
     rtlwifi_poll(sta_rx);
     sta_tick(now);
-    if (st == WIFI_ON && sv_ssid[0] && !auto_tried && sta_state() == STA_IDLE && !sta_scanning() && sta_net_count() > 0) {
-        auto_tried = 1;                                              /* одна попытка за поиск */
-        for (int i = 0; i < sta_net_count(); i++) {
-            const sta_net_t *n = sta_net(i);
-            if (!seq(n->ssid, sv_ssid) || n->sec == 2) continue;
-            scp(try_ssid, sv_ssid, 33); scp(try_pass, sv_pass, 64);
-            sta_connect(i, sv_pass);
-            break;
+    if (st == WIFI_ON && sv_ssid[0] && sta_state() != STA_CONNECTED && !wifi_busy() && !sta_scanning()) {
+        if (!auto_tried && sta_net_count() > 0) {
+            auto_tried = 1;                                          /* одна попытка за поиск: берём первую из запомненных, что видна, в порядке «свежести» */
+            const char *order[KNOWN_EXTRA + 1]; int no = 0;
+            order[no++] = sv_ssid;
+            for (int i = 0; i < KNOWN_EXTRA; i++) if (kn_ssid[i][0]) order[no++] = kn_ssid[i];
+            int done = 0;
+            for (int o = 0; o < no && !done; o++)
+                for (int i = 0; i < sta_net_count(); i++) {
+                    const sta_net_t *n = sta_net(i);
+                    if (!seq(n->ssid, order[o]) || n->sec == 2) continue;
+                    scp(try_ssid, order[o], 33); scp(try_pass, known_pass(order[o]), 64);
+                    sta_connect(i, try_pass);
+                    done = 1; break;
+                }
+            retry_at = now + RETRY_TICKS;
+        } else if (auto_tried && retries < RETRY_MAX && (int)(now - retry_at) >= 0) {
+            retries++; auto_tried = 0; retry_at = now + RETRY_TICKS; sta_scan();      /* не вышло (сети не видно, роутер ещё грузится, обрыв): ищем снова */
         }
     }
 }
@@ -138,7 +191,13 @@ int wifi_connect(int i, const char *pass)
     scp(try_ssid, sta_net(ord[i])->ssid, 33); scp(try_pass, pass, 64);
     return sta_connect(ord[i], pass);
 }
-void wifi_disconnect(void) { sv_ssid[0] = sv_pass[0] = try_ssid[0] = 0; if (hw_ready) sta_disconnect(); }   /* вручную отключили - забыть сеть */
+void wifi_disconnect(void)                                         /* вручную отключили - забыть эту сеть (остальные запомненные остаются) */
+{
+    if (try_ssid[0]) forget(try_ssid); else forget(sv_ssid);
+    try_ssid[0] = 0; retries = RETRY_MAX;
+    if (hw_ready) sta_disconnect();
+    prefs_flush();
+}
 
 static char *put_str(char *p, const char *a) { while (*a) *p++ = *a++; return p; }
 static char *put_num(char *p, unsigned x) { char r[12]; int l = 0; do { r[l++] = (char)('0' + x % 10); x /= 10; } while (x); while (l) *p++ = r[--l]; return p; }

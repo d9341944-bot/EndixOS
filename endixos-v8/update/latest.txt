@@ -1,5 +1,5 @@
-build=43
-version=8.8
-size=3345148
-notes=Команда perf: замеры скорости|Быстрее HTTPS и обновления
-sha256=bdc68dc26636cc1c7116a301b1ca9b3c8e7147d52ec8367e119c541e0bcca28c
+build=44
+version=8.9
+size=3349504
+notes=Wi-Fi запоминает сети и переподключается сам|Команда perf
+sha256=c724b631006acc0b56408ad7dbed01e6145b1cf1dc9047425825d70539c2c57d

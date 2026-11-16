@@ -41,7 +41,8 @@ typedef struct {
     u8  bat_ok, bat_pct, bat_ac, bat_mask;       /* батарея: смещения в EC (bat_ok = 0xA5, когда заданы; pct 0xFF - выключено) */
     u8  ts_ok, ts_auto, ts_tz;                   /* время: ts_ok = 0xA5, когда заданы; пояс в четвертях часа + 64, автосинхронизация */
     u8  lg_ok, lg_ui, lg_kb;                     /* язык: lg_ok = 0xA5, когда заданы; язык интерфейса и раскладка при старте */
-    u8  pad[512 - 3 - 3 - 4 - 9 - GLASS_PARAMS - 1 - 8 - 16 - 1 - 1 - 1 - 1 - 33 - 64 - 1 - 1 - 4 - 4];
+    char ssid2[3][33], pass2[3][64];             /* ещё три запомненные Wi-Fi сети (старые файлы: нули) */
+    u8  pad[512 - 3 * 33 - 3 * 64 - 3 - 3 - 4 - 9 - GLASS_PARAMS - 1 - 8 - 16 - 1 - 1 - 1 - 1 - 33 - 64 - 1 - 1 - 4 - 4];
 } blob_t;
 
 __attribute__((weak)) fat_t *res_mount(void) { return 0; }
@@ -79,6 +80,7 @@ static void gather(blob_t *b)
     b->lg_ok = 0xA5; b->lg_ui = (u8)lang_get(); b->lg_kb = (u8)kbd_layout();
     { int p, a, m; bat_get_config(&p, &a, &m); b->bat_ok = 0xA5; b->bat_pct = (u8)(p < 0 ? 0xFF : p); b->bat_ac = (u8)(a < 0 ? 0xFF : a); b->bat_mask = (u8)m; }
     int on = 0; wifi_pref_get(b->ssid, b->pass, &on); b->wifi_on = (u8)on;
+    for (int i = 0; i < 3; i++) wifi_known_get(i, b->ssid2[i], b->pass2[i]);
 }
 
 static int same(const blob_t *a, const blob_t *b)
@@ -114,6 +116,12 @@ static void apply(const blob_t *b)
     for (i = 0; i < 32 && b->ssid[i]; i++) ss[i] = b->ssid[i]; ss[i] = 0;
     for (i = 0; i < 63 && b->pass[i]; i++) pp[i] = b->pass[i]; pp[i] = 0;
     wifi_pref_set(ss, pp, b->wifi_on ? 1 : 0);
+    for (int k = 0; k < 3; k++) {
+        char s2[33], p2[64]; int j;
+        for (j = 0; j < 32 && b->ssid2[k][j]; j++) s2[j] = b->ssid2[k][j]; s2[j] = 0;
+        for (j = 0; j < 63 && b->pass2[k][j]; j++) p2[j] = b->pass2[k][j]; p2[j] = 0;
+        wifi_known_set(k, s2, p2);
+    }
 }
 
 void prefs_init(prefs_rd_t rd, prefs_wr_t wr)
@@ -130,6 +138,21 @@ void prefs_init(prefs_rd_t rd, prefs_wr_t wr)
     } else if (rd && rd(0, &b) == 0 && b.magic == MAGIC && b.ver == PVER)
         apply(&b);
     gather(&saved);                        /* то, что реально на экране */
+}
+
+void prefs_flush(void)                                   /* записать сразу, не дожидаясь паузы (после входа в Wi-Fi, перед перезагрузкой) */
+{
+    if (!file_fs && !rw_wr) return;
+    blob_t cur;
+    gather(&cur);
+    if (same(&cur, &saved)) return;
+    if (file_fs) {
+        static u8 raw[512];
+        for (u32 i = 0; i < sizeof cur; i++) raw[i] = ((u8 *)&cur)[i];
+        if (fat_write(file_fs, CFG_PATH, raw, sizeof raw) == 0) saved = cur;
+        return;
+    }
+    /* виртуальный диск (запуск с флешки): пишет только prefs_tick с проверкой пустого сектора */
 }
 
 void prefs_tick(u32 ticks)

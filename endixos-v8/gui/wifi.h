@@ -22,4 +22,7 @@ int         wifi_busy(void);                       /* идёт поиск или
 /* сохранение между перезагрузками (хранит prefs.c) */
 void        wifi_pref_get(char *ssid, char *pass, int *on);   /* ssid[33], pass[64] */
 void        wifi_pref_set(const char *ssid, const char *pass, int on);
+void        wifi_known_get(int i, char *ssid, char *pass);    /* i = 0..2: ещё запомненные сети (кроме последней) */
+void        wifi_known_set(int i, const char *ssid, const char *pass);
+void        prefs_flush(void);                                 /* prefs.c: записать настройки на диск немедленно */
 #endif
