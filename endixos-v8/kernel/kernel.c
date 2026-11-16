@@ -30,6 +30,7 @@
 #include "userdb.h"
 #include "../gui/login.h"
 #include "../gui/fb.h"
+#include "../gui/font.h"
 #include "../gui/wm.h"
 
 static void halt_forever(void)
@@ -52,10 +53,21 @@ void sys_reboot(void)
 void sys_shutdown(void)
 {
     __asm__ volatile("cli");
-    acpi_poweroff();                                   /* настоящее железо */
+    int r = acpi_poweroff();                           /* настоящее железо */
     outw(0x604, 0x2000);
     outw(0xB004, 0x2000);
     outw(0x4004, 0x3400);
+    {   /* питание не отключилось: говорим об этом, а не молча чернеем */
+        const char *m1 = "The computer could not power itself off.";
+        const char *m2 = "Hold the power button for 4 seconds.";
+        fb_fill_rect(0, 0, (i32)fb_width(), (i32)fb_height(), RGB(0, 0, 0));
+        font_draw((i32)fb_width() / 2 - font_width(m1, FONT_REGULAR) / 2, (i32)fb_height() / 2 - 20, m1, RGB(220, 220, 220), FONT_REGULAR);
+        font_draw((i32)fb_width() / 2 - font_width(m2, FONT_REGULAR) / 2, (i32)fb_height() / 2 + 4, m2, RGB(220, 220, 220), FONT_REGULAR);
+        font_draw((i32)fb_width() / 2 - font_width(acpi_diag(), FONT_REGULAR) / 2, (i32)fb_height() / 2 + 40, acpi_diag(), RGB(130, 130, 140), FONT_REGULAR);
+        fb_flip();
+        serial_puts("shutdown failed: "); serial_puts(acpi_diag()); serial_puts("\n");
+        (void)r;
+    }
     halt_forever();
 }
 

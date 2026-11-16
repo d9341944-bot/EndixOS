@@ -2130,7 +2130,7 @@ static void menu_close(void)
 static void shutdown_now(void)
 {
     fb_fill_rect(0, 0, (i32)fb_width(), (i32)fb_height(), RGB(0, 0, 0));
-    const char *m = "It is now safe to turn off your computer.";
+    const char *m = "Shutting down...";
     font_draw((i32)fb_width() / 2 - font_width(m, FONT_REGULAR) / 2, (i32)fb_height() / 2, m,
               RGB(200, 200, 200), FONT_REGULAR);
     fb_flip();
