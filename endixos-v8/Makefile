@@ -11,7 +11,7 @@ AS      := nasm -f elf32
 LD      := ld -m elf_i386
 CFLAGS  := -std=gnu11 -O2 -Wall -Wextra -ffreestanding -fno-pic -fno-pie \
            -fno-stack-protector -fno-builtin -fno-tree-loop-distribute-patterns \
-           -mgeneral-regs-only -nostdlib -MMD -MP
+           -mgeneral-regs-only -mtune=bonnell -fno-asynchronous-unwind-tables -nostdlib -MMD -MP
 LDFLAGS := -T linker.ld -nostdlib -z noexecstack
 
 BUILD  := build

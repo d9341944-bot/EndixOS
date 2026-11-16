@@ -12,6 +12,9 @@ static u32  backbuf[FB_MAX_W * FB_MAX_H];          /* теневой буфер 
 static u32  flipped_bytes;                         /* счётчик записей в видеопамять (для замеров) */
 static u32  bgbuf[FB_MAX_W * FB_MAX_H];            /* кэш обоев */
 
+static u32 prevbuf[FB_MAX_W * FB_MAX_H];            /* что сейчас на экране (см. fb_flip) */
+static int prev_ok;
+
 int fb_init(u32 addr, u32 pitch, u32 width, u32 height, u32 bpp)
 {
     if (bpp != 32 || width > FB_MAX_W || height > FB_MAX_H)
@@ -21,6 +24,7 @@ int fb_init(u32 addr, u32 pitch, u32 width, u32 height, u32 bpp)
     s_width  = width;
     s_height = height;
     s_phys_w = width;
+    prev_ok = 0;
     return 0;
 }
 
@@ -230,12 +234,28 @@ void fb_frame_restore(i32 x, i32 y, i32 w, i32 h)
 }
 
 /* Сцена целиком на экран одним проходом. */
+/* Видеопамять пишется медленно, поэтому на экран уходят только изменившиеся отрезки строк:
+ * prevbuf хранит сцену, ушедшую на экран в прошлый раз. Курсор в сцену не входит (его стирает wm до flip). */
+
+void fb_flip_invalidate(void) { prev_ok = 0; }
+
 void fb_flip(void)
 {
-    if (s_phys_w != s_width) { scale_out(0, s_height, 0, s_phys_w); return; }
-    for (u32 y = 0; y < s_height; y++)
-        memcpy(screen + y * s_pitch, &backbuf[y * s_width], s_width * 4);
-    flipped_bytes += s_width * s_height * 4;
+    if (s_phys_w != s_width) { prev_ok = 0; scale_out(0, s_height, 0, s_phys_w); return; }
+    for (u32 y = 0; y < s_height; y++) {
+        const u32 *a = &backbuf[y * s_width];
+        u32 *b = &prevbuf[y * s_width];
+        u32 i = 0, j = s_width;
+        if (prev_ok) {
+            while (i < j && a[i] == b[i]) i++;
+            if (i == j) continue;                          /* строка не изменилась */
+            while (a[j - 1] == b[j - 1]) j--;
+        }
+        memcpy(screen + y * s_pitch + i * 4, a + i, (j - i) * 4);
+        memcpy(b + i, a + i, (j - i) * 4);
+        flipped_bytes += (j - i) * 4;
+    }
+    prev_ok = 1;
 }
 
 u32 fb_flipped_bytes(void)

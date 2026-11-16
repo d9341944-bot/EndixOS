@@ -51,4 +51,7 @@ void fb_perf_set(int level);       /* 0 полное качество, 1 без 
 int  fb_perf_get(void);
 void fb_glass(i32 x, i32 y, i32 w, i32 h, i32 r, u32 corners, i32 br, u32 tint, u32 ta, u32 sheen);             /* сколько байт записано в видеопамять всего */
 
+/* Следующий fb_flip перепишет весь экран (если видеопамять изменили мимо fb_flip). */
+void fb_flip_invalidate(void);
+
 #endif

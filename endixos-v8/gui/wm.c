@@ -3560,6 +3560,7 @@ int wm_frame(u32 ticks)
     if (scene_dirty && (i32)(ticks - last_scene_tick) >= 2) {
         last_scene_tick = ticks; frame_was_scene = 1;
         wm_render();
+        fb_frame_restore(drawn_x, drawn_y, drawn_w, drawn_h);     /* старый курсор стираем: flip шлёт только изменённое */
         fb_flip();
         draw_cursor();
         cursor_moved = 0;
