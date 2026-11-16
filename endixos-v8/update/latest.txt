@@ -1,5 +1,5 @@
-build=41
-version=8.6
-size=3345012
-notes=Быстрее загрузка|Курсор не мигает|Быстрее отрисовка
-sha256=9e65aa09d3c9769a636a9caf4ebf78998f23e2fd51fcde1b07054d7f453e390b
+build=42
+version=8.7
+size=3345096
+notes=Быстрее HTTPS и обновления (шифрование в 6 раз быстрее)|Быстрее загрузка
+sha256=12fa33bff3df08b494e02238bfe18fb6e16a34b0c5dce3fee4812c9947188e49

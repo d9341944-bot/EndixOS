@@ -121,51 +121,92 @@ static void gen_sbox(void)
 
 static u8 xt(u8 x) { return (u8)((x << 1) ^ ((x & 0x80) ? 0x1B : 0)); }
 
+/* AES по таблице Te0 (1 КБ): подстановка, ShiftRows и MixColumns одним обращением; остальные столбцы - сдвиги слова. */
+static u32 te0[256]; static int te_ok;
+static void gen_te(void)
+{
+    if (!sbox_ok) gen_sbox();
+    for (int i = 0; i < 256; i++) {
+        u32 sb = sbox[i], s2 = xt((u8)sb), s3 = s2 ^ sb;
+        te0[i] = s2 << 24 | sb << 16 | sb << 8 | s3;
+    }
+    te_ok = 1;
+}
+static inline u32 ror(u32 x, int n) { return x >> n | x << (32 - n); }
+static inline u32 ld32(const u8 *p) { return (u32)p[0] << 24 | (u32)p[1] << 16 | (u32)p[2] << 8 | p[3]; }
+
 static void aes_enc(const u8 *rk, const u8 in[16], u8 out[16])
 {
-    u8 s[16], t[16];
-    for (int i = 0; i < 16; i++) s[i] = in[i] ^ rk[i];
-    for (int r = 1; r <= 10; r++) {
-        for (int c = 0; c < 4; c++)
-            for (int row = 0; row < 4; row++) t[4 * c + row] = sbox[s[4 * ((c + row) & 3) + row]];
-        if (r < 10) {
-            for (int c = 0; c < 4; c++) {
-                u8 a0 = t[4*c], a1 = t[4*c+1], a2 = t[4*c+2], a3 = t[4*c+3];
-                s[4*c]   = (u8)(xt(a0) ^ (xt(a1) ^ a1) ^ a2 ^ a3);
-                s[4*c+1] = (u8)(a0 ^ xt(a1) ^ (xt(a2) ^ a2) ^ a3);
-                s[4*c+2] = (u8)(a0 ^ a1 ^ xt(a2) ^ (xt(a3) ^ a3));
-                s[4*c+3] = (u8)((xt(a0) ^ a0) ^ a1 ^ a2 ^ xt(a3));
-            }
-        } else mcopy(s, t, 16);
-        for (int i = 0; i < 16; i++) s[i] ^= rk[16 * r + i];
+    if (!te_ok) gen_te();
+    u32 s0 = ld32(in) ^ ld32(rk), s1 = ld32(in + 4) ^ ld32(rk + 4), s2 = ld32(in + 8) ^ ld32(rk + 8), s3 = ld32(in + 12) ^ ld32(rk + 12);
+    for (int r = 1; r < 10; r++) {
+        const u8 *k = rk + 16 * r;
+        u32 t0 = te0[s0 >> 24] ^ ror(te0[(s1 >> 16) & 255], 8) ^ ror(te0[(s2 >> 8) & 255], 16) ^ ror(te0[s3 & 255], 24) ^ ld32(k);
+        u32 t1 = te0[s1 >> 24] ^ ror(te0[(s2 >> 16) & 255], 8) ^ ror(te0[(s3 >> 8) & 255], 16) ^ ror(te0[s0 & 255], 24) ^ ld32(k + 4);
+        u32 t2 = te0[s2 >> 24] ^ ror(te0[(s3 >> 16) & 255], 8) ^ ror(te0[(s0 >> 8) & 255], 16) ^ ror(te0[s1 & 255], 24) ^ ld32(k + 8);
+        u32 t3 = te0[s3 >> 24] ^ ror(te0[(s0 >> 16) & 255], 8) ^ ror(te0[(s1 >> 8) & 255], 16) ^ ror(te0[s2 & 255], 24) ^ ld32(k + 12);
+        s0 = t0; s1 = t1; s2 = t2; s3 = t3;
     }
-    mcopy(out, s, 16);
+    const u8 *k = rk + 160;
+    u32 o[4];
+    o[0] = ((u32)sbox[s0 >> 24] << 24 | (u32)sbox[(s1 >> 16) & 255] << 16 | (u32)sbox[(s2 >> 8) & 255] << 8 | sbox[s3 & 255]) ^ ld32(k);
+    o[1] = ((u32)sbox[s1 >> 24] << 24 | (u32)sbox[(s2 >> 16) & 255] << 16 | (u32)sbox[(s3 >> 8) & 255] << 8 | sbox[s0 & 255]) ^ ld32(k + 4);
+    o[2] = ((u32)sbox[s2 >> 24] << 24 | (u32)sbox[(s3 >> 16) & 255] << 16 | (u32)sbox[(s0 >> 8) & 255] << 8 | sbox[s1 & 255]) ^ ld32(k + 8);
+    o[3] = ((u32)sbox[s3 >> 24] << 24 | (u32)sbox[(s0 >> 16) & 255] << 16 | (u32)sbox[(s1 >> 8) & 255] << 8 | sbox[s2 & 255]) ^ ld32(k + 12);
+    for (int i = 0; i < 4; i++) { out[4*i] = (u8)(o[i] >> 24); out[4*i+1] = (u8)(o[i] >> 16); out[4*i+2] = (u8)(o[i] >> 8); out[4*i+3] = (u8)o[i]; }
 }
 
 /* ---------------- GHASH и GCM ---------------- */
 
-static void gmul(u32 x[4], const u32 h[4])
+static inline void mulx(u32 v[4])                 /* v * x в поле GCM (битовый порядок GCM) */
 {
-    u32 z[4] = { 0, 0, 0, 0 }, v[4] = { h[0], h[1], h[2], h[3] };
-    for (int i = 0; i < 128; i++) {
-        if ((x[i >> 5] >> (31 - (i & 31))) & 1) { z[0] ^= v[0]; z[1] ^= v[1]; z[2] ^= v[2]; z[3] ^= v[3]; }
-        u32 lsb = v[3] & 1;
-        v[3] = v[3] >> 1 | v[2] << 31; v[2] = v[2] >> 1 | v[1] << 31; v[1] = v[1] >> 1 | v[0] << 31; v[0] >>= 1;
-        if (lsb) v[0] ^= 0xE1000000u;
-    }
-    x[0] = z[0]; x[1] = z[1]; x[2] = z[2]; x[3] = z[3];
+    u32 lsb = v[3] & 1;
+    v[3] = v[3] >> 1 | v[2] << 31; v[2] = v[2] >> 1 | v[1] << 31; v[1] = v[1] >> 1 | v[0] << 31; v[0] >>= 1;
+    if (lsb) v[0] ^= 0xE1000000u;
 }
 
-static u32 ld32(const u8 *p) { return (u32)p[0] << 24 | (u32)p[1] << 16 | (u32)p[2] << 8 | p[3]; }
+static u32 ghr[16]; static int ghr_ok;               /* поправка при сдвиге на 4 бита, по выдвинутым битам */
 
-static void ghash_upd(u32 y[4], const u32 h[4], const u8 *d, u32 n)
+static void ghash_tab(u32 m[16][4], const u8 h[16])
+{
+    if (!ghr_ok) {
+        for (int r = 0; r < 16; r++) { u32 v[4] = { 0, 0, 0, (u32)r }; for (int k = 0; k < 4; k++) mulx(v); ghr[r] = v[0]; }
+        ghr_ok = 1;
+    }
+    u32 v[4];
+    for (int i = 0; i < 4; i++) v[i] = ld32(h + 4 * i);
+    for (int i = 0; i < 4; i++) { m[0][i] = 0; m[8][i] = v[i]; }
+    for (int bit = 4; bit >= 1; bit >>= 1) { mulx(v); for (int i = 0; i < 4; i++) m[bit][i] = v[i]; }
+    for (int n = 3; n < 16; n++) {
+        if ((n & (n - 1)) == 0) continue;
+        int lo = n & -n;
+        for (int i = 0; i < 4; i++) m[n][i] = m[lo][i] ^ m[n - lo][i];
+    }
+}
+
+static void gmul(u32 x[4], const u32 m[16][4])        /* x = x * H, по 4 бита с конца */
+{
+    u32 z0 = 0, z1 = 0, z2 = 0, z3 = 0;
+    for (int i = 15; i >= 0; i--) {
+        u32 w = x[i >> 2] >> (8 * (3 - (i & 3)));
+        for (int half = 0; half < 2; half++) {
+            u32 nib = half == 0 ? w & 15 : (w >> 4) & 15;
+            u32 r = z3 & 15;
+            z3 = z3 >> 4 | z2 << 28; z2 = z2 >> 4 | z1 << 28; z1 = z1 >> 4 | z0 << 28; z0 = (z0 >> 4) ^ ghr[r];
+            z0 ^= m[nib][0]; z1 ^= m[nib][1]; z2 ^= m[nib][2]; z3 ^= m[nib][3];
+        }
+    }
+    x[0] = z0; x[1] = z1; x[2] = z2; x[3] = z3;
+}
+
+static void ghash_upd(u32 y[4], const u32 m[16][4], const u8 *d, u32 n)
 {
     while (n) {
         u8 b[16];
         u32 k = n > 16 ? 16 : n;
         mzero(b, 16); mcopy(b, d, k);
         for (int i = 0; i < 4; i++) y[i] ^= ld32(b + 4 * i);
-        gmul(y, h);
+        gmul(y, m);
         d += k; n -= k;
     }
 }
@@ -187,6 +228,7 @@ void aesgcm_init(aesgcm_t *c, const u8 key[16])
     u8 z[16];
     mzero(z, 16);
     aes_enc(c->rk, z, c->h);
+    ghash_tab(c->m, c->h);
 }
 
 static void gcm_crypt(const aesgcm_t *c, const u8 nonce[12], const u8 *in, u32 n, u8 *out)
@@ -204,10 +246,9 @@ static void gcm_crypt(const aesgcm_t *c, const u8 nonce[12], const u8 *in, u32 n
 
 static void gcm_tag(const aesgcm_t *c, const u8 nonce[12], const u8 *aad, u32 al, const u8 *ct, u32 n, u8 tag[16])
 {
-    u32 h[4], y[4] = { 0, 0, 0, 0 };
-    for (int i = 0; i < 4; i++) h[i] = ld32(c->h + 4 * i);
-    ghash_upd(y, h, aad, al);
-    ghash_upd(y, h, ct, n);
+    u32 y[4] = { 0, 0, 0, 0 };
+    ghash_upd(y, c->m, aad, al);
+    ghash_upd(y, c->m, ct, n);
     u8 l[16];
     mzero(l, 16);
     u32 ab = al << 3, abh = al >> 29, cb = n << 3, cbh = n >> 29;
@@ -215,7 +256,7 @@ static void gcm_tag(const aesgcm_t *c, const u8 nonce[12], const u8 *aad, u32 al
     l[4] = (u8)(ab >> 24); l[5] = (u8)(ab >> 16); l[6] = (u8)(ab >> 8); l[7] = (u8)ab;
     l[8] = (u8)(cbh >> 24); l[9] = (u8)(cbh >> 16); l[10] = (u8)(cbh >> 8); l[11] = (u8)cbh;
     l[12] = (u8)(cb >> 24); l[13] = (u8)(cb >> 16); l[14] = (u8)(cb >> 8); l[15] = (u8)cb;
-    ghash_upd(y, h, l, 16);
+    ghash_upd(y, c->m, l, 16);
     u8 j0[16], ek[16];
     mcopy(j0, nonce, 12); j0[12] = 0; j0[13] = 0; j0[14] = 0; j0[15] = 1;
     aes_enc(c->rk, j0, ek);

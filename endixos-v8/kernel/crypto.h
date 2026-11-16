@@ -15,7 +15,7 @@ void hmac_sha256(const u8 *key, u32 kl, const u8 *msg, u32 ml, u8 out[32]);
 /* PRF из TLS 1.2: P_SHA256(secret, label + seed), результат длиной olen. */
 void tls12_prf(const u8 *secret, u32 sl, const char *label, const u8 *seed, u32 seedl, u8 *out, u32 olen);
 
-typedef struct { u8 rk[176]; u8 h[16]; } aesgcm_t;
+typedef struct { u8 rk[176]; u8 h[16]; u32 m[16][4]; } aesgcm_t;     /* m: таблица кратных H для GHASH по 4 бита */
 void aesgcm_init(aesgcm_t *c, const u8 key[16]);
 /* Шифрует/расшифровывает in -> out (на месте можно), tag 16 байт. nonce 12 байт. */
 void aesgcm_seal(const aesgcm_t *c, const u8 nonce[12], const u8 *aad, u32 al, const u8 *in, u32 n, u8 *out, u8 tag[16]);
