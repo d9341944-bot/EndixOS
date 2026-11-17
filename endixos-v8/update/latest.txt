@@ -1,5 +1,5 @@
-build=47
+build=48
 version=8.3
-size=3353724
-notes=Wi-Fi: надёжнее вход в сеть|Выключение с диагностикой
-sha256=387baf65bc5797463c25fd9034ac350ccc605cf7827bccf3e925eb1bf29131a1
+size=3804192
+notes=Doom (original id engine; needs your own DOOM1.WAD in /Games), faster big-file reads
+sha256=1cadf22059b1eff59c73b802ad7f6c83ecf8c263f927f82e024eed68ac7f637b

@@ -9,7 +9,7 @@
 enum {
     ICON_LAUNCHPAD = 6,
     ICON_SIDE_HOME, ICON_SIDE_DESKTOP, ICON_SIDE_DOC, ICON_SIDE_DOWN, ICON_SIDE_PHOTO, ICON_SIDE_MUSIC, ICON_SIDE_DISK,   /* без плитки, цвет акцента */
-    ICON_TILE_WALL, ICON_TILE_APPEAR, ICON_TILE_GLASS, ICON_APP_CALC, ICON_APP_NOTES, ICON_APP_CLOCK, ICON_APP_CAL, ICON_APP_MUSIC,
+    ICON_TILE_WALL, ICON_TILE_APPEAR, ICON_TILE_GLASS, ICON_APP_CALC, ICON_APP_NOTES, ICON_APP_CLOCK, ICON_APP_CAL, ICON_APP_MUSIC, ICON_APP_DOOM,
     ICON_DESK_FOLDER, ICON_DESK_FILE, ICON_TRASH, ICON_TRASH_FULL,                                                                                          /* значки на рабочем столе */                                                                                         /* плитки для Settings */
     ICON_EMOJI0,                                                                                                                                            /* 15 эмодзи для аватарок */
     ICON_COUNT = ICON_EMOJI0 + 15

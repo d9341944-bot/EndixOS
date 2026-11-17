@@ -15,7 +15,7 @@ CFLAGS  := -std=gnu11 -O2 -Wall -Wextra -ffreestanding -fno-pic -fno-pie \
 LDFLAGS := -T linker.ld -nostdlib -z noexecstack
 
 BUILD  := build
-CSRC   := $(shell find kernel drivers gui -name '*.c')
+CSRC   := $(shell find kernel drivers gui doom -name '*.c')
 COBJ   := $(patsubst %.c,$(BUILD)/%.o,$(CSRC))
 ASMSRC := $(wildcard boot/*.asm)
 ASMOBJ := $(patsubst %.asm,$(BUILD)/%.o,$(ASMSRC))
@@ -68,6 +68,11 @@ $(BUILD)/%.o: %.asm
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+# Движок Doom (GPLv2, id Software): своя мини-libc из doom/libc, без предупреждений чужого кода.
+$(BUILD)/doom/%.o: doom/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -w -nostdinc -isystem $(shell $(CC) -print-file-name=include) -Idoom/libc -Idoom -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 -c $< -o $@
 
 # Проверка Multiboot-заголовка (нужен grub-file)
 check: $(KERNEL)

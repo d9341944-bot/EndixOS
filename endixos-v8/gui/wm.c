@@ -34,6 +34,7 @@ __attribute__((weak)) u32 pci_read32(u32 bus, u32 dev, u32 fn, u32 off) { (void)
 #include "mission.h"
 #include "font.h"
 #include "lang.h"
+#include "doomapp.h"
 #include "wifi.h"
 #include "perf.h"
 #include "../drivers/pit.h"
@@ -74,7 +75,7 @@ __attribute__((weak)) u32 pci_read32(u32 bus, u32 dev, u32 fn, u32 off) { (void)
 #define TITLE_H   28
 #define WIN_R     14
 
-enum { APP_FILES, APP_TERMINAL, APP_SETTINGS, APP_SNAKE, APP_ABOUT, APP_BROWSER, APP_CALC, APP_NOTES, APP_CLOCK, APP_CAL, APP_MUSIC, APP_COUNT, APP_TEXTEDIT = APP_COUNT, APP_PREVIEW, WIN_COUNT };   /* до APP_COUNT - приложения Dock; TextEdit и Preview открываются из Files */
+enum { APP_FILES, APP_TERMINAL, APP_SETTINGS, APP_SNAKE, APP_ABOUT, APP_BROWSER, APP_CALC, APP_NOTES, APP_CLOCK, APP_CAL, APP_MUSIC, APP_DOOM, APP_COUNT, APP_TEXTEDIT = APP_COUNT, APP_PREVIEW, WIN_COUNT };   /* до APP_COUNT - приложения Dock; TextEdit и Preview открываются из Files */
 
 typedef struct {
     int open;
@@ -84,17 +85,21 @@ typedef struct {
     i32 sx, sy, sw, sh;          /* позиция и размер до разворачивания */
 } window_t;
 
-static const char *const app_name[WIN_COUNT]  = { "Files", "Terminal", "Settings", "Snake", "About", "Browix", "Calculator", "Notes", "Clock", "Calendar", "Music", "TextEdit", "Preview" };
-static const char *const app_title[WIN_COUNT] = { "Files", "Terminal", "Settings", "Snake", "", "Browix", "Calculator", "Notes", "Clock", "Calendar", "Music", "", "" };
-static const i32 app_w[WIN_COUNT] = { FILES_W, 580, 640, 380, 280, BROWSER_W, CALC_W, 560, CLK_W, CAL_W, MUS_W, 560, 640 };
-static const u8  app_resizable[WIN_COUNT] = { 1, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1 };
-static const i32 app_minw[WIN_COUNT] = { 560, 320, 640, 0, 0, 420, 0, 320, 0, 0, 0, 320, 320 };
-static const i32 app_minh[WIN_COUNT] = { 260 + TITLE_H, 150 + TITLE_H, 520, 0, 0, 260 + TITLE_H, 0, 200 + TITLE_H, 0, 0, 0, 200 + TITLE_H, 200 + TITLE_H };
-static const i32 app_h[WIN_COUNT] = { FILES_H + TITLE_H, 360, 520, 400, 520, BROWSER_H, CALC_H + TITLE_H, 420, CLK_H + TITLE_H, CAL_H + TITLE_H, MUS_H + TITLE_H, 440, 500 };
+static const char *const app_name[WIN_COUNT]  = { "Files", "Terminal", "Settings", "Snake", "About", "Browix", "Calculator", "Notes", "Clock", "Calendar", "Music", "Doom", "TextEdit", "Preview" };
+static const char *const app_title[WIN_COUNT] = { "Files", "Terminal", "Settings", "Snake", "", "Browix", "Calculator", "Notes", "Clock", "Calendar", "Music", "Doom", "", "" };
+static const i32 app_w[WIN_COUNT] = { FILES_W, 580, 640, 380, 280, BROWSER_W, CALC_W, 560, CLK_W, CAL_W, MUS_W, DOOMAPP_W, 560, 640 };
+static const u8  app_resizable[WIN_COUNT] = { 1, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 1 };
+static const i32 app_minw[WIN_COUNT] = { 560, 320, 640, 0, 0, 420, 0, 320, 0, 0, 0, 0, 320, 320 };
+static const i32 app_minh[WIN_COUNT] = { 260 + TITLE_H, 150 + TITLE_H, 520, 0, 0, 260 + TITLE_H, 0, 200 + TITLE_H, 0, 0, 0, 0, 200 + TITLE_H, 200 + TITLE_H };
+static const i32 app_h[WIN_COUNT] = { FILES_H + TITLE_H, 360, 520, 400, 520, BROWSER_H, CALC_H + TITLE_H, 420, CLK_H + TITLE_H, CAL_H + TITLE_H, MUS_H + TITLE_H, DOOMAPP_H + TITLE_H, 440, 500 };
 
+__attribute__((weak)) void doomapp_draw(i32 x, i32 y, i32 w, i32 h) { (void)x; (void)y; (void)w; (void)h; }
+__attribute__((weak)) int doomapp_tick(u32 t, int a) { (void)t; (void)a; return 0; }
+__attribute__((weak)) int doomapp_click(void) { return 0; }
+__attribute__((weak)) int doomapp_key(i32 k) { (void)k; return 0; }
 static void open_window(int app);
 void wm_open_file(int node);
-static int app_icon(int a) { return a < 6 ? a : a == APP_COUNT ? ICON_LAUNCHPAD : a == APP_CALC ? ICON_APP_CALC : a == APP_NOTES ? ICON_APP_NOTES : a == APP_CLOCK ? ICON_APP_CLOCK : a == APP_CAL ? ICON_APP_CAL : ICON_APP_MUSIC; }
+static int app_icon(int a) { return a < 6 ? a : a == APP_COUNT ? ICON_LAUNCHPAD : a == APP_CALC ? ICON_APP_CALC : a == APP_NOTES ? ICON_APP_NOTES : a == APP_CLOCK ? ICON_APP_CLOCK : a == APP_CAL ? ICON_APP_CAL : a == APP_DOOM ? ICON_APP_DOOM : ICON_APP_MUSIC; }
 static int dock_app(int a) { return a >= APP_COUNT ? APP_FILES : a; }   /* окна TextEdit и Preview в Dock живут под значком Files */
 static int lp_open;
 static void genie_finish(void);
@@ -907,6 +912,8 @@ static void term_run_cmd(char *line)
         open_window(APP_CALC);
     } else if (s_eq(line, "notes")) {
         open_window(APP_NOTES);
+    } else if (s_eq(line, "doom")) {
+        open_window(APP_DOOM);
     } else if (s_eq(line, "music")) {
         open_window(APP_MUSIC);
     } else if (s_eq(line, "clock")) {
@@ -1970,7 +1977,7 @@ typedef struct { const char *label; int id; int disabled; } mitem_t;
 
 static int    menu_open = -1, menu_hover = -1;
 static i32    mt_x0[MENU_COUNT], mt_x1[MENU_COUNT];
-static mitem_t mitems[16];
+static mitem_t mitems[24];
 static int    mn;
 
 static void mi(const char *label, int id, int disabled)
@@ -2442,7 +2449,7 @@ static int window_at(i32 x, i32 y);
 
 /* Участок фона под стеклом: запоминаем до рисования тела окна и возвращаем перед стеклом. */
 static u32 gl_save_t[FB_MAX_W * TITLE_H], gl_save_s[200 * 800];
-static const i32 app_sidebar[WIN_COUNT] = { 150, 0, 170, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const i32 app_sidebar[WIN_COUNT] = { 150, 0, 170, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
 static void rect_save(u32 *buf, i32 x, i32 y, i32 w, i32 h)
 {
@@ -2678,6 +2685,7 @@ static void draw_window(int app, int focused)
     case APP_CLOCK:    clk_draw(ox, oy, cw, ch); break;
     case APP_CAL:      cal_draw(ox, oy, cw, ch); break;
     case APP_MUSIC:    music_draw(ox, oy, cw, ch); break;
+    case APP_DOOM:     doomapp_draw(ox, oy, cw, ch); break;
     case APP_TEXTEDIT: te_draw(ox, oy, cw, ch); break;
     case APP_PREVIEW:  viewer_draw(ox, oy, cw, ch); break;
     }
@@ -2957,6 +2965,7 @@ int wm_tick(u32 ticks)
     if (clk_tick(ticks, wins[APP_CLOCK].open && !wins[APP_CLOCK].minimized && top_app() == APP_CLOCK)) cm = 1;
     if (bat_poll(ticks)) cm = 1;
     if (music_tick(ticks, wins[APP_MUSIC].open && !wins[APP_MUSIC].minimized)) cm = 1;
+    if (doomapp_tick(ticks, wins[APP_DOOM].open && !wins[APP_DOOM].minimized && top_app() == APP_DOOM)) cm = 1;
     if (clk_fired()) notify_icon("Timer", "Time's up", ICON_APP_CLOCK);
     if (te_tick(ticks, wins[APP_TEXTEDIT].open && !wins[APP_TEXTEDIT].minimized && top_app() == APP_TEXTEDIT)) cm = 1;
     if (notes_tick(ticks, wins[APP_NOTES].open && !wins[APP_NOTES].minimized && top_app() == APP_NOTES)) cm = 1;
@@ -3168,6 +3177,8 @@ static void on_press(void)
         cal_click(cx, cy);
     else if (app == APP_MUSIC)
         music_click(cx, cy);
+    else if (app == APP_DOOM)
+        { if (doomapp_click()) scene_dirty = 1; }
     else if (app == APP_TEXTEDIT)
         te_click(cx, cy);
     else if (app == APP_PREVIEW)
@@ -3400,6 +3411,7 @@ void wm_handle_event(const event_t *e)
         case APP_CLOCK:    clk_key(e->a); scene_dirty = 1; break;
         case APP_CAL:      cal_key(e->a); scene_dirty = 1; break;
         case APP_MUSIC:    music_key(e->a); scene_dirty = 1; break;
+        case APP_DOOM:     doomapp_key(e->a); scene_dirty = 1; break;
         case APP_TEXTEDIT: te_key(e->a, e->b); scene_dirty = 1; break;
         case APP_PREVIEW:  viewer_key(e->a); scene_dirty = 1; break;
         default: break;

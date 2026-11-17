@@ -296,6 +296,11 @@ int fat_read(fat_t *f, const char *path, void *buf, u32 cap)
     u8 tmp[SEC];
     while (got < size && cl >= 2 && cl < 0x0FFFFFF7u) {
         for (u32 s = 0; s < f->spc && got < size; s++) {
+            u32 nn = f->spc - s; if (nn > 64) nn = 64; if (nn > (size - got) / SEC) nn = (size - got) / SEC;
+            if (nn >= 2) {                                          /* крупные файлы читаем целыми кусками прямо в буфер */
+                if (rdsec(f, cl_lba(f, cl) + s, nn, (u8 *)buf + got)) return -1;
+                got += nn * SEC; s += nn - 1; continue;
+            }
             if (rdsec(f, cl_lba(f, cl) + s, 1, tmp)) return -1;
             u32 n = size - got < SEC ? size - got : SEC;
             cp((u8 *)buf + got, tmp, n); got += n;

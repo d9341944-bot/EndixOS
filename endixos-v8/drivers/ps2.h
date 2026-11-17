@@ -19,4 +19,7 @@ void ps2_tp_diag(char *out, int cap);                    /* текст для к
 int  kbd_layout(void);
 void kbd_set_layout(int ru);
 
+/* Сырые коды клавиш (набор 1, ext = префикс E0) для игр. Пока hook задан и возвращает 1, обычные события клавиш не создаются. */
+extern int (*ps2_raw_hook)(u8 sc, int ext, int press);
+
 #endif

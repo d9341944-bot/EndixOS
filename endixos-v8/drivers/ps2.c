@@ -255,6 +255,8 @@ static int k_shift, k_ctrl, k_caps, k_ext, k_win, k_alt, k_ru;
 int kbd_layout(void) { return k_ru; }           /* 0 = EN, 1 = RU */
 void kbd_set_layout(int ru) { k_ru = ru != 0; event_push(EV_KEY, KEY_LAYOUT, 0, 0); }
 
+int (*ps2_raw_hook)(u8 sc, int ext, int press);         /* сырые клавиши для игр: вернуть 1 - клавиша съедена */
+
 static void kbd_byte(u8 b)
 {
     if (b == 0xE0 || b == 0xE1) {         /* расширенные клавиши (стрелки и т.п.) пока игнорируем */
@@ -263,6 +265,8 @@ static void kbd_byte(u8 b)
     }
     int release = b & 0x80;
     u8 sc = b & 0x7F;
+
+    if (ps2_raw_hook && !(k_ext && (sc == 0x5B || sc == 0x5C)) && ps2_raw_hook(sc, k_ext, !release)) { k_ext = 0; return; }
 
     if (k_ext) {
         k_ext = 0;

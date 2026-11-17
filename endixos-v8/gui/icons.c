@@ -766,10 +766,26 @@ static void ic_music(u32 *cv)
     });
 }
 
+static void ic_doom(u32 *cv)                                    /* прицел на красной плитке (свой значок, без логотипа id) */
+{
+    base(cv, C(190, 36, 30), C(96, 12, 14));
+    shp r1 = CI(64, 64, 36), r2 = CI(64, 64, 25), dot = CI(64, 64, 6);
+    shp t1 = CA(64, 14, 64, 40, 4), t2 = CA(64, 88, 64, 114, 4), t3 = CA(14, 64, 40, 64, 4), t4 = CA(88, 64, 114, 64, 4);
+    SHADOWED({
+        fill(cv, &r1, 0, SOLID(C(255, 255, 255)));
+        fill(cv, &r2, 0, SOLID(C(150, 24, 24)));
+        fill(cv, &dot, 0, SOLID(C(255, 255, 255)));
+        fill(cv, &t1, 0, SOLID(C(255, 255, 255)));
+        fill(cv, &t2, 0, SOLID(C(255, 255, 255)));
+        fill(cv, &t3, 0, SOLID(C(255, 255, 255)));
+        fill(cv, &t4, 0, SOLID(C(255, 255, 255)));
+    });
+}
+
 void icon_render(int id, u32 *cv, u32 accent, int dark)
 {
     for (int i = 0; i < S * S; i++) cv[i] = 0;
-    int is_tile = id <= ICON_LAUNCHPAD || (id >= ICON_TILE_WALL && id <= ICON_TILE_GLASS) || id == ICON_APP_CALC || id == ICON_APP_NOTES || id == ICON_APP_CLOCK || id == ICON_APP_CAL || id == ICON_APP_MUSIC;
+    int is_tile = id <= ICON_LAUNCHPAD || (id >= ICON_TILE_WALL && id <= ICON_TILE_GLASS) || id == ICON_APP_CALC || id == ICON_APP_NOTES || id == ICON_APP_CLOCK || id == ICON_APP_CAL || id == ICON_APP_MUSIC || id == ICON_APP_DOOM;
     g_accent = accent & 0xFFFFFF;
     g_tone = is_tile && g_style >= ICON_STYLE_MONO ? g_style : 0;
     int sty = g_style; if (!is_tile) g_style = 0;                /* значки рабочего стола и панелей не меняют стиль */
@@ -786,6 +802,7 @@ void icon_render(int id, u32 *cv, u32 accent, int dark)
     case ICON_APP_CLOCK: ic_clock(cv); break;
     case ICON_APP_CAL: ic_calendar(cv); break;
     case ICON_APP_MUSIC: ic_music(cv); break;
+    case ICON_APP_DOOM: ic_doom(cv); break;
     case ICON_TILE_WALL: tile_icon(cv, 0); break;
     case ICON_TILE_APPEAR: tile_icon(cv, 1); break;
     case ICON_TILE_GLASS: tile_icon(cv, 2); break;
