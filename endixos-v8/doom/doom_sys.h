@@ -11,4 +11,11 @@ void doom_files_reset(void);
 int  doom_setjmp(void) __attribute__((returns_twice));
 void doom_longjmp(int v) __attribute__((noreturn));
 void doom_leave(int code) __attribute__((noreturn));
+/* звук: микшер в i_endixsound.c, вывод - ядро (HDA, циклический буфер стерео 48 кГц 16 бит) */
+void doom_snd_pump(void);                     /* раз в кадр: домешать звук вперёд от позиции воспроизведения */
+void doom_snd_stop(void);
+void doom_snd_resume(void);                   /* окно снова активно: запустить вывод заново */
+int  doom_audio_start(const int16_t *ring, uint32_t frames);   /* 1 - цикл запущен */
+uint32_t doom_audio_pos(void);                /* позиция воспроизведения в кадрах от начала кольца */
+void doom_audio_stop(void);
 #endif

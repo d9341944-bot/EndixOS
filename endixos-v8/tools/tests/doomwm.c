@@ -32,6 +32,8 @@ const char *doom_error(void) { return "err"; }
 void doom_stop(void) { alive = 0; }
 void doom_input(int sc, int ext, int press) { (void)ext; if (press && sc == 0x1C) keys++; }
 void doom_release_all(void) { keys += 100; }
+void doom_snd_stop(void) {} void doom_snd_resume(void) {}
+int hda_present(void) { return 1; } int hda_play_loop(const i16 *b, u32 f) { (void)b; (void)f; return 1; } u32 hda_pos_frames(void) { return 0; } void hda_stop(void) {}
 
 int main(void)
 {

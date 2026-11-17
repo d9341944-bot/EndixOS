@@ -9,6 +9,15 @@ void doom_serial(char c) { wr(2, &c, 1); }
 static uint32_t fake;
 uint32_t doom_now_ms(void) { return fake += 1; }
 void doom_idle(void) { fake += 4; }
+static const int16_t *aring; static uint32_t aframes, at0, alast; static int16_t acap[48000 * 20 * 2]; static uint32_t ncap;
+int doom_audio_start(const int16_t *r, uint32_t f) { aring = r; aframes = f; at0 = fake; alast = 0; return 1; }
+uint32_t doom_audio_pos(void) {
+    if (!aring) return 0;
+    uint32_t p = ((fake - at0) * 48u) % aframes;
+    while (alast != p) { if (ncap < sizeof acap / 4) { acap[ncap * 2] = aring[alast * 2]; acap[ncap * 2 + 1] = aring[alast * 2 + 1]; ncap++; } alast = (alast + 1) % aframes; }
+    return p;
+}
+void doom_audio_stop(void) { aring = 0; }
 static void ppm(const char *name)
 {
     int fd = sys3(5, (int)name, 0101 | 01000, 0644);
@@ -36,6 +45,9 @@ void _start_c(int *sp)
         doom_frame();
         if (f == 50 || f == 120 || f == 400 || f == 690) { char nm[] = "/tmp/doom_0.ppm"; nm[10] = '0' + shots++; ppm(nm); }
     }
+    { int pk = 0; uint32_t nz = 0; for (uint32_t i = 0; i < ncap * 2; i++) { int v = acap[i] < 0 ? -acap[i] : acap[i]; if (v > pk) pk = v; if (v) nz++; }
+      wr(1, "audio frames captured: ", 23); num(ncap); wr(1, " nonzero samples: ", 18); num(nz); wr(1, " peak: ", 7); num(pk); wr(1, "\n", 1);
+      int fd = sys3(5, (int)"/tmp/doom.raw", 0101 | 01000, 0644); wr(fd, (char *)acap, ncap * 4); sys3(6, fd, 0, 0); }
     wr(1, "done, alive=", 12); num(doom_alive()); wr(1, "\n", 1);
     sys3(1, 0, 0, 0);
 }

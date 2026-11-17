@@ -72,14 +72,14 @@ void *doom_alloc_wad(uint32_t size) { if (!started) { doom_mem_init(arena, ARENA
 
 int doom_start(const void *wad, uint32_t wadsize, const char *wadname)
 {
-    static char *argv[] = { "doom", "-iwad", "doom.wad", "-nosound", "-nomusic", "-nosfx", 0 };
+    static char *argv[] = { "doom", "-iwad", "doom.wad", "-nomusic", 0 };
     if (!started) { doom_mem_init(arena, ARENA); started = 1; }
     err[0] = 0; qh = qt = 0; memset(held, 0, sizeof held);
     doom_files_reset();
     doom_file_add("doom.wad", wad, wadsize); (void)wadname;
     alive = 1;
     if (doom_setjmp()) { alive = 0; if (!err[0]) strcpy(err, "Doom stopped"); return -1; }
-    doomgeneric_Create(6, argv);
+    doomgeneric_Create(4, argv);
     return 0;
 }
 void doom_frame(void)
@@ -87,9 +87,10 @@ void doom_frame(void)
     if (!alive) return;
     if (doom_setjmp()) { alive = 0; return; }
     doomgeneric_Tick();
+    doom_snd_pump();
 }
 int doom_alive(void) { return alive; }
 const uint32_t *doom_screen(void) { return (const uint32_t *)DG_ScreenBuffer; }
 const char *doom_error(void) { return err; }
-void doom_stop(void) { alive = 0; }
+void doom_stop(void) { alive = 0; doom_snd_stop(); }
 uint32_t doom_wad_max(void) { return ARENA - (10u << 20); }     /* зона 6 МБ и кадровые буферы остаются в арене */

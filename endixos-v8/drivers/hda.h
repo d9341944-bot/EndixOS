@@ -11,6 +11,8 @@ void hda_play_chime(void);                 /* звук запуска */
 void hda_play_pop(void);                   /* щелчок при смене громкости */
 void hda_poll(u32 now_ticks, u32 hz);      /* останавливает воспроизведение, когда звук закончился */
 int  hda_play_buf(const i16 *stereo48, u32 frames);   /* свой буфер (плеер): 48 кГц стерео 16 бит, адрес кратен 128; 1 - запущено */
+int  hda_play_loop(const i16 *stereo48, u32 frames);  /* кольцо: играет по кругу до hda_stop; frames*4 кратно 128 */
+u32  hda_pos_frames(void);                 /* позиция воспроизведения в кольце, кадров */
 void hda_stop(void);
 int  hda_present(void);
 int  hda_playing(void);

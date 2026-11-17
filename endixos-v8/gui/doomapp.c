@@ -8,7 +8,9 @@
 #include "../kernel/blk.h"
 #include "../kernel/event.h"
 #include "../doom/doom_plat.h"
+#include "../doom/doom_sys.h"
 #include "photos.h"
+#include "../drivers/hda.h"
 
 enum { S_IDLE, S_LOADING, S_RUN, S_ERR, S_DONE };
 static int st = S_IDLE, was_active;
@@ -71,6 +73,9 @@ static const void *find_wad(u32 *len)
 static void set(const char *s) { int i = 0; for (; s[i] && i < 95; i++) msg[i] = s[i]; msg[i] = 0; }
 
 static int raw(u8 sc, int ext, int press) { doom_input(sc, ext, press); return 1; }
+int doom_audio_start(const int16_t *ring, uint32_t frames) { return hda_present() && hda_play_loop(ring, frames); }
+uint32_t doom_audio_pos(void) { return hda_pos_frames(); }
+void doom_audio_stop(void) { hda_stop(); }
 static void grab(int on) { ps2_raw_hook = on ? raw : 0; }
 
 static void start(void)
@@ -91,9 +96,9 @@ int doomapp_tick(u32 ticks, int active)
     (void)ticks;
     if (st == S_LOADING) { if (active) { start(); return 1; } return 0; }
     if (st != S_RUN) { if (was_active) { grab(0); was_active = 0; } return 0; }
-    if (!doom_alive()) { grab(0); st = S_DONE; was_active = 0; set("The game has ended. Restart EndixOS to play again."); return 1; }
+    if (!doom_alive()) { grab(0); doom_snd_stop(); st = S_DONE; was_active = 0; set("The game has ended. Restart EndixOS to play again."); return 1; }
     if (active != was_active) {
-        if (!active) { doom_release_all(); grab(0); } else grab(1);
+        if (!active) { doom_release_all(); grab(0); doom_snd_stop(); } else { grab(1); doom_snd_resume(); }
         was_active = active;
     }
     if (!active) return 0;

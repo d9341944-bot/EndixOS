@@ -1,5 +1,5 @@
-build=48
+build=49
 version=8.3
-size=3804192
-notes=Doom (original id engine; needs your own DOOM1.WAD in /Games), faster big-file reads
-sha256=1cadf22059b1eff59c73b802ad7f6c83ecf8c263f927f82e024eed68ac7f637b
+size=3805052
+notes=Doom sound effects (HDA), Doom app
+sha256=2424016710b543f4e82010ce26f72eb6cb84161c05869ddd8b933b01ae86d7a0

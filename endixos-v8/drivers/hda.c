@@ -229,8 +229,10 @@ static void stream_reset(void)
     for (u32 i = 0; i < 2000 && (rd32(sdbase + SD_CTL) & 1); i++) udelay(1);
 }
 
+static int looping;
 static void stream_stop(void)
 {
+    looping = 0;
     if (!present) return;
     wr32(sdbase + SD_CTL, rd32(sdbase + SD_CTL) & ~2u);
     playing = 0;
@@ -303,7 +305,7 @@ void hda_play_pop(void)
 
 void hda_poll(u32 now_ticks, u32 hz)
 {
-    if (!playing) return;
+    if (!playing || looping) return;
     if (pending_start) {
         t_start = now_ticks;
         t_len = (t_len * hz + 47999) / 48000 + hz / 20;               /* длительность + 50 мс запаса */
@@ -319,6 +321,16 @@ int hda_play_buf(const i16 *stereo48, u32 frames)
     stream_start_buf(stereo48, frames);
     return 1;
 }
+
+/* Кольцо, которое играет по кругу, пока не вызовут hda_stop (игры): буфер кратен 128 байт, пишет его сам вызывающий. */
+int hda_play_loop(const i16 *stereo48, u32 frames)
+{
+    if (!have_path || !stereo48 || frames < 256 || ((unsigned long)stereo48 & 127) || (frames * 4) & 127) return 0;
+    stream_start_buf(stereo48, frames);
+    looping = 1;
+    return 1;
+}
+u32 hda_pos_frames(void) { return present && playing ? rd32(sdbase + SD_LPIB) / 4 : 0; }
 
 void hda_stop(void) { stream_stop(); }
 
