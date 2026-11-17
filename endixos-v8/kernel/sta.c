@@ -270,6 +270,8 @@ static void on_beacon(const u8 *f, u32 n, int rssi, int ch_hint)
     scopy(nn->ssid, ssid, 33); scopy(nn->bssid, f + 16, 6); nn->channel = (u8)ch; nn->rssi = (i8)rssi; nn->sec = (u8)sec;
 }
 
+#define STA_TRIES 6                                  /* попыток авторизации/ассоциации */
+#define STA_RETRY 50                                 /* между попытками, тиков по 10 мс: 0,5 с */
 static void fail(const char *t) { have_ptk = 0; radio.set_link(0); radio.set_bssid(0); set_state(STA_FAILED, t); }
 
 void sta_rx(const u8 *f, u32 n, int rssi)
@@ -281,7 +283,7 @@ void sta_rx(const u8 *f, u32 n, int rssi)
         if ((sub == 8 || sub == 5) && st == STA_SCANNING) { on_beacon(f, n, rssi, scan_ch); return; }
         if (!meq(f + 16, bssid, 6) || st == STA_IDLE || st == STA_SCANNING || st == STA_FAILED) return;
         if (sub == 11 && st == STA_AUTH && n >= 30) {                            /* ответ на авторизацию */
-            if (f[28] == 0 && f[29] == 0) { set_state(STA_ASSOC, "Joining the network..."); tries = 0; deadline = now + 100; send_assoc(); }
+            if (f[28] == 0 && f[29] == 0) { set_state(STA_ASSOC, "Joining the network..."); tries = 0; deadline = now + STA_RETRY; send_assoc(); }
             else fail("The network refused the connection.");
         } else if (sub == 1 && st == STA_ASSOC && n >= 30) {                     /* ответ на ассоциацию */
             if (f[26] == 0 && f[27] == 0) {
@@ -349,7 +351,7 @@ int sta_connect(int idx, const char *pw)
     }
     have_ptk = 0; tx_pn_lo = tx_pn_hi = 0;
     radio.set_channel(nets[idx].channel); radio.set_bssid(bssid);
-    tries = 0; deadline = now + 100; set_state(STA_AUTH, "Connecting...");
+    tries = 0; deadline = now + STA_RETRY; set_state(STA_AUTH, "Connecting...");
     send_auth();
     return 0;
 }
@@ -370,8 +372,9 @@ void sta_tick(u32 t)
             radio.set_channel(scan_ch); send_probe(); dwell_start = now;
         }
     } else if ((st == STA_AUTH || st == STA_ASSOC) && (i32)(now - deadline) >= 0) {
-        if (++tries >= 3) { fail("The network did not answer."); return; }
-        deadline = now + 100;
+        if (++tries >= STA_TRIES) { fail("The network did not answer."); return; }
+        deadline = now + STA_RETRY;
+        radio.set_channel(nets[cur].channel); radio.set_bssid(bssid);        /* заново: канал мог не встать с первого раза */
         if (st == STA_AUTH) send_auth(); else send_assoc();
     } else if (st == STA_HANDSHAKE && (i32)(now - deadline) >= 0) {
         fail("Incorrect password.");

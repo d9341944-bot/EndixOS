@@ -1,5 +1,5 @@
-build=46
+build=47
 version=8.3
 size=3353724
-notes=Выключение: надёжнее и с диагностикой|Wi-Fi запоминает сети
-sha256=fa6bbcb444de31fccbb9085be466b6a17bdf8ef37027d92bfc1c4cc9401665ae
+notes=Wi-Fi: надёжнее вход в сеть|Выключение с диагностикой
+sha256=387baf65bc5797463c25fd9034ac350ccc605cf7827bccf3e925eb1bf29131a1
