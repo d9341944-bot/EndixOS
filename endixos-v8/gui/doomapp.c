@@ -23,7 +23,34 @@ extern void serial_putc(char c) __attribute__((weak));
 void doom_serial(char c) { if (serial_putc) serial_putc(c); }
 
 /* ---- поиск и чтение WAD ---- */
+static fat_t vol;                           /* том, где лежит WAD: туда же пишем сохранения */
+static char vol_dir[16]; static int vol_ok;
 typedef struct { char alias[16]; u32 size; int found; } hit_t;
+static int is_dsg(const char *n) { int l = 0; while (n[l]) l++; return l > 4 && n[l - 4] == '.' && (n[l - 3] | 32) == 'd' && (n[l - 2] | 32) == 's' && (n[l - 1] | 32) == 'g'; }
+static void join(char *path, const char *dir, const char *name)
+{
+    int k = 0; for (const char *p = dir; *p; p++) path[k++] = *p;
+    if (k > 1) path[k++] = '/';
+    for (const char *p = name; *p && k < 46; p++) path[k++] = (*p >= 'a' && *p <= 'z') ? (char)(*p - 32) : *p;
+    path[k] = 0;
+}
+static int on_save(void *ctx, const char *name, const char *alias, u32 size, int is_dir)
+{
+    (void)ctx;
+    if (is_dir || !is_dsg(name) || size == 0 || size > (1u << 20)) return 0;
+    char path[48]; join(path, vol_dir, alias);
+    void *buf = doom_alloc_tmp(size);
+    if (!buf) return 0;
+    if (fat_read(&vol, path, buf, size) == (int)size) doom_load_save(name, buf, size);
+    doom_free_tmp(buf);
+    return 0;
+}
+void doom_file_written(const char *name, const void *data, uint32_t size)
+{
+    if (!vol_ok || !is_dsg(name)) return;
+    char path[48]; join(path, vol_dir, name);
+    fat_write(&vol, path, data, size);
+}
 static int is_wad(const char *n) { int l = 0; while (n[l]) l++; return l > 4 && n[l - 4] == '.' && (n[l - 3] | 32) == 'w' && (n[l - 2] | 32) == 'a' && (n[l - 1] | 32) == 'd'; }
 static int on_entry(void *ctx, const char *name, const char *alias, u32 size, int is_dir)
 {
@@ -52,31 +79,40 @@ static const void *load_from(fat_t *f, u32 *len)
         if (!buf) return 0;
         int n = fat_read(f, path, buf, h.size);
         if (n != (int)h.size) return 0;
+        {   int k = 0; for (const char *p = dirs[d]; *p && k < 15; p++) vol_dir[k++] = *p; vol_dir[k] = 0; vol_ok = 1;
+            fat_list(f, dirs[d], on_save, 0); }
         *len = h.size; return buf;
     }
     return 0;
 }
 static const void *find_wad(u32 *len)
 {
-    static fat_t f;
+    fat_t *pf = &vol;
     const void *w = 0;
-    if (photos_volume(&f) && (w = load_from(&f, len))) return w;
+    if (photos_volume(pf) && (w = load_from(pf, len))) return w;
     if (usb_drive_count() == 0) usb_scan();
     for (int i = 0; i < usb_drive_count(); i++) {
         blk_t *b = usb_blk(i); u8 type; u32 start, size;
         if (mbr_get_part(b, 0, &type, &start, &size) != 0) start = 0;
-        if (fat_mount(b, start, &f) == 0 && (w = load_from(&f, len))) return w;
+        if (fat_mount(b, start, pf) == 0 && (w = load_from(pf, len))) return w;
     }
     return 0;
 }
 
 static void set(const char *s) { int i = 0; for (; s[i] && i < 95; i++) msg[i] = s[i]; msg[i] = 0; }
 
-static int raw(u8 sc, int ext, int press) { doom_input(sc, ext, press); return 1; }
+static int cap;                                  /* мышь захвачена (F12) */
+static int mouse_cb(int dx, int dy, int btn) { doom_mouse(dx, dy, btn); return 1; }
+static void set_cap(int on) { cap = on; ps2_mouse_hook = on ? mouse_cb : 0; }
+static int raw(u8 sc, int ext, int press)
+{
+    if (sc == 0x58 && !ext) { if (press) set_cap(!cap); return 1; }       /* F12: мышь вкл/выкл */
+    doom_input(sc, ext, press); return 1;
+}
 int doom_audio_start(const int16_t *ring, uint32_t frames) { return hda_present() && hda_play_loop(ring, frames); }
 uint32_t doom_audio_pos(void) { return hda_pos_frames(); }
 void doom_audio_stop(void) { hda_stop(); }
-static void grab(int on) { ps2_raw_hook = on ? raw : 0; }
+static void grab(int on) { ps2_raw_hook = on ? raw : 0; if (!on) set_cap(0); }
 
 static void start(void)
 {

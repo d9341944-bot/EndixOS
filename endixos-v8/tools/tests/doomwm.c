@@ -32,6 +32,11 @@ const char *doom_error(void) { return "err"; }
 void doom_stop(void) { alive = 0; }
 void doom_input(int sc, int ext, int press) { (void)ext; if (press && sc == 0x1C) keys++; }
 void doom_release_all(void) { keys += 100; }
+int (*ps2_mouse_hook)(int, int, int);
+static int saves_loaded, mouse_n, mouse_dx; static u32 save_sum;
+void doom_mouse(int dx, int dy, int b) { (void)dy; (void)b; mouse_n++; mouse_dx += dx; }
+void *doom_alloc_tmp(uint32_t n) { return malloc(n); } void doom_free_tmp(void *p) { free(p); }
+void doom_load_save(const char *n, const void *d, uint32_t s) { (void)n; saves_loaded++; const u8 *p = d; for (u32 i = 0; i < s; i++) save_sum = save_sum * 31 + p[i]; }
 void doom_snd_stop(void) {} void doom_snd_resume(void) {}
 int hda_present(void) { return 1; } int hda_play_loop(const i16 *b, u32 f) { (void)b; (void)f; return 1; } u32 hda_pos_frames(void) { return 0; } void hda_stop(void) {}
 
@@ -53,10 +58,23 @@ int main(void)
     memcpy(wad, "IWAD", 4); h = 0; for (u32 i = 0; i < sizeof wad; i++) h = h * 31 + wad[i];
     fat_mkdir(&F, "/Games");
     CHECK(fat_write(&F, "/Games/DOOM1.WAD", wad, sizeof wad) == 0, "WAD written");
+    static u8 sv[5000]; u32 svh = 0; for (u32 i = 0; i < sizeof sv; i++) sv[i] = (u8)(i * 13 + 5), svh = svh * 31 + sv[i];
+    CHECK(fat_write(&F, "/Games/DOOMSAV0.DSG", sv, sizeof sv) == 0, "old save written");
     photos_scan_volume(&B, 0);
     doomapp_click(); ticks(4);
     CHECK(alive, "started after WAD found");
     CHECK(wadlen_seen == sizeof wad && sum_seen == h, "WAD read back byte-exact via chunked fat_read");
+    CHECK(saves_loaded == 1 && save_sum == svh, "existing save loaded from disk");
+    { static u8 nw[3000]; for (u32 i = 0; i < sizeof nw; i++) nw[i] = (u8)(i * 3 + 1);
+      doom_file_written("doomsav2.dsg", nw, sizeof nw); doom_file_written("default.cfg", nw, 10);
+      static u8 rb[3000]; static fat_t F2; fat_mount(&B, 0, &F2); int n = fat_read(&F2, "/Games/DOOMSAV2.DSG", rb, sizeof rb);
+      CHECK(n == (int)sizeof nw && !memcmp(rb, nw, sizeof nw), "new save persisted to disk");
+      CHECK(fat_read(&F2, "/Games/DEFAULT.CFG", rb, 16) < 0, "config is not written"); }
+    CHECK(ps2_raw_hook != 0 && ps2_mouse_hook == 0, "mouse free by default");
+    ps2_raw_hook(0x58, 0, 1); ps2_raw_hook(0x58, 0, 0);
+    CHECK(ps2_mouse_hook != 0 && ps2_mouse_hook(3, 4, 1) == 1 && mouse_dx == 3, "F12 captures mouse");
+    ps2_raw_hook(0x58, 0, 1);
+    CHECK(ps2_mouse_hook == 0, "F12 releases mouse");
     ticks(10);
     CHECK(nframes > 3, "frames run");
     CHECK(ps2_raw_hook != 0, "raw key hook active while focused");

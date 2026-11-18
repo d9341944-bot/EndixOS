@@ -2,9 +2,11 @@
  * Сборка: tools/tests/doomrun.sh <wad> */
 #include <stdint.h>
 #include "../../doom/doom_plat.h"
+static void num_(int v);
 static int sys3(int n, int a, int b, int c) { int r; __asm__ volatile("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory"); return r; }
 static void wr(int fd, const char *s, int n) { sys3(4, fd, (int)s, n); }
 static int slen(const char *s) { int n = 0; while (s[n]) n++; return n; }
+void doom_file_written(const char *n, const void *d, uint32_t s) { (void)d; wr(1, "file written: ", 14); wr(1, n, slen(n)); wr(1, " ", 1); num_(s); wr(1, "\n", 1); }
 void doom_serial(char c) { wr(2, &c, 1); }
 static uint32_t fake;
 uint32_t doom_now_ms(void) { return fake += 1; }
@@ -18,6 +20,8 @@ uint32_t doom_audio_pos(void) {
     return p;
 }
 void doom_audio_stop(void) { aring = 0; }
+static void num(int v);
+static void num_(int v) { num(v); }
 static void ppm(const char *name)
 {
     int fd = sys3(5, (int)name, 0101 | 01000, 0644);
@@ -40,10 +44,13 @@ void _start_c(int *sp)
     int shots = 0;
     for (int f = 0; f < 700 && doom_alive(); f++) {
         if (f == 100 || f == 160) { doom_input(0x1C, 0, 1); doom_frame(); doom_input(0x1C, 0, 0); }   /* Enter: меню / новая игра */
+        if (f == 500) { doom_input(0x3C, 0, 1); doom_frame(); doom_input(0x3C, 0, 0); }
+        if (f == 505 || f == 515 || f == 525) { int k = f == 505 ? 0x1C : f == 515 ? 0x1E : 0x1C; doom_input(k, 0, 1); doom_frame(); doom_input(k, 0, 0); }
+        if (f > 330 && f < 380) doom_mouse(f % 2 ? 4 : -4, 0, f == 340);
         if (f == 210) doom_input(0x1D, 0, 1);                                                          /* Ctrl удержан: стрельба */
         if (f == 215) doom_input(0x48, 1, 1);                                                          /* вперёд */
         doom_frame();
-        if (f == 50 || f == 120 || f == 400 || f == 690) { char nm[] = "/tmp/doom_0.ppm"; nm[10] = '0' + shots++; ppm(nm); }
+        if (f == 508 || f == 518 || f == 540 || f == 690) { char nm[] = "/tmp/doom_0.ppm"; nm[10] = '0' + shots++; ppm(nm); }
     }
     { int pk = 0; uint32_t nz = 0; for (uint32_t i = 0; i < ncap * 2; i++) { int v = acap[i] < 0 ? -acap[i] : acap[i]; if (v > pk) pk = v; if (v) nz++; }
       wr(1, "audio frames captured: ", 23); num(ncap); wr(1, " nonzero samples: ", 18); num(nz); wr(1, " peak: ", 7); num(pk); wr(1, "\n", 1);

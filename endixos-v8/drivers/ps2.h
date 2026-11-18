@@ -21,5 +21,6 @@ void kbd_set_layout(int ru);
 
 /* Сырые коды клавиш (набор 1, ext = префикс E0) для игр. Пока hook задан и возвращает 1, обычные события клавиш не создаются. */
 extern int (*ps2_raw_hook)(u8 sc, int ext, int press);
+extern int (*ps2_mouse_hook)(int dx, int dy, int btn);   /* dy: вниз - плюс */
 
 #endif

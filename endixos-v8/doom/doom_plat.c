@@ -5,6 +5,7 @@
 #include "doomkeys.h"
 #include "doom_sys.h"
 #include "doom_plat.h"
+#include "d_event.h"
 
 #ifndef DOOM_ARENA_MB
 #define DOOM_ARENA_MB 40
@@ -56,6 +57,9 @@ void doom_release_all(void)
 {
     for (int i = 0; i < 256; i++) if (held[i]) { held[i] = 0; int k = map_key(i & 127, i >= 128); if (k) { int n = (qt + 1) & 63; if (n != qh) { q[qt] = (uint16_t)k; qt = n; } } }
 }
+static volatile int mdx, mdy; static volatile int mbtn; static int mlastbtn;
+void doom_mouse(int dx, int dy, int btn) { mdx += dx; mdy += dy; mbtn = btn; }
+void doom_load_save(const char *name, const void *data, uint32_t size) { doom_file_put(name, data, size); }
 int DG_GetKey(int *pressed, unsigned char *key)
 {
     if (qh == qt) return 0;
@@ -68,6 +72,8 @@ uint32_t DG_GetTicksMs(void) { return doom_now_ms(); }
 void DG_SetWindowTitle(const char *t) { (void)t; }
 void DG_DrawFrame(void) { }
 
+void *doom_alloc_tmp(uint32_t size) { if (!started) { doom_mem_init(arena, ARENA); started = 1; } return malloc(size); }
+void doom_free_tmp(void *p) { free(p); }
 void *doom_alloc_wad(uint32_t size) { if (!started) { doom_mem_init(arena, ARENA); started = 1; } return malloc(size); }
 
 int doom_start(const void *wad, uint32_t wadsize, const char *wadname)
@@ -75,7 +81,6 @@ int doom_start(const void *wad, uint32_t wadsize, const char *wadname)
     static char *argv[] = { "doom", "-iwad", "doom.wad", 0 };
     if (!started) { doom_mem_init(arena, ARENA); started = 1; }
     err[0] = 0; qh = qt = 0; memset(held, 0, sizeof held);
-    doom_files_reset();
     doom_file_add("doom.wad", wad, wadsize); (void)wadname;
     alive = 1;
     if (doom_setjmp()) { alive = 0; if (!err[0]) strcpy(err, "Doom stopped"); return -1; }
@@ -86,6 +91,10 @@ void doom_frame(void)
 {
     if (!alive) return;
     if (doom_setjmp()) { alive = 0; return; }
+    {
+        int dx = mdx, dy = mdy, b = mbtn; mdx -= dx; mdy -= dy;
+        if (dx || dy || b != mlastbtn) { event_t ev; ev.type = ev_mouse; ev.data1 = b; ev.data2 = dx * 2; ev.data3 = -dy * 2; ev.data4 = 0; D_PostEvent(&ev); mlastbtn = b; }
+    }
     doomgeneric_Tick();
     doom_snd_pump();
 }

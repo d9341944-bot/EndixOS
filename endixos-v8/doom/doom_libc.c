@@ -295,6 +295,16 @@ void doom_file_add(const char *name, const void *data, uint32_t size)    /* то
         return;
     }
 }
+void doom_file_put(const char *name, const void *data, uint32_t size)       /* файл для записи с готовым содержимым (сохранения) */
+{
+    for (int i = 0; i < NFILES; i++) if (!files[i].used) {
+        uint32_t cap = (size + 4095u) & ~4095u; uint8_t *d = malloc(cap ? cap : 1);
+        if (!d) return;
+        memcpy(d, data, size);
+        strncpy(files[i].name, base_of(name), 95); files[i].data = d; files[i].size = size; files[i].cap = cap; files[i].used = 1; files[i].ro = 0;
+        return;
+    }
+}
 void doom_files_reset(void)
 {
     for (int i = 0; i < NFILES; i++) { if (files[i].used && !files[i].ro && files[i].data) free(files[i].data); files[i].used = 0; files[i].data = 0; }
@@ -322,7 +332,15 @@ FILE *fopen(const char *p, const char *m)
     }
     return 0;
 }
-int fclose(FILE *f) { if (f && !f->console) { f->data = 0; f->cap = 0; f->wr = 0; } return 0; }
+__attribute__((weak)) void doom_file_written(const char *name, const void *data, uint32_t size) { (void)name; (void)data; (void)size; }
+int fclose(FILE *f)
+{
+    if (f && !f->console) {
+        if (f->wr && f->data) { mfile *m = (mfile *)f->data; doom_file_written(m->name, m->data, m->size); }
+        f->data = 0; f->cap = 0; f->wr = 0;
+    }
+    return 0;
+}
 static mfile *mf_of(FILE *f) { return (mfile *)f->data; }
 size_t fread(void *b, size_t s, size_t n, FILE *f)
 {

@@ -8,6 +8,8 @@ void doom_mem_init(void *base, uint32_t size);
 uint32_t doom_mem_free(void);                 /* самый большой свободный кусок */
 void doom_file_add(const char *name, const void *data, uint32_t size);
 void doom_files_reset(void);
+void doom_file_put(const char *name, const void *data, uint32_t size);
+void doom_file_written(const char *name, const void *data, uint32_t size);   /* ядро сохраняет *.dsg на диск */
 int  doom_setjmp(void) __attribute__((returns_twice));
 void doom_longjmp(int v) __attribute__((noreturn));
 void doom_leave(int code) __attribute__((noreturn));

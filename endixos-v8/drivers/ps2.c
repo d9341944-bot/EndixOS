@@ -93,6 +93,7 @@ static void tp_buttons(int btn)
 {
     if (btn == tp.btn) return;
     tp.btn = btn;
+    if (ps2_mouse_hook && ps2_mouse_hook(0, 0, btn)) return;
     event_push(EV_MOUSE, mx, my, btn);
 }
 
@@ -107,6 +108,7 @@ static void tp_move(i32 dx, i32 dy)
     i32 px = tp.rx / 64, py = tp.ry / 64;
     tp.rx -= px * 64; tp.ry -= py * 64;
     if (!px && !py) return;
+    if (ps2_mouse_hook && ps2_mouse_hook(px, -py, tp.btn)) return;
     mx += px; my -= py;                                   /* Y тачпада растёт вверх */
     if (mx < 0) mx = 0;
     if (my < 0) my = 0;
@@ -209,6 +211,7 @@ static void mouse_byte(u8 b)
     i32 dx = (i32)pkt[1] - (i32)((f << 4) & 0x100);
     i32 dy = (i32)pkt[2] - (i32)((f << 3) & 0x100);
 
+    if (ps2_mouse_hook && ps2_mouse_hook(dx, -dy, f & 7)) return;
     mx += dx;
     my -= dy;                             /* у мыши Y растёт вверх, у экрана - вниз */
     if (mx < 0) mx = 0;
@@ -255,7 +258,8 @@ static int k_shift, k_ctrl, k_caps, k_ext, k_win, k_alt, k_ru;
 int kbd_layout(void) { return k_ru; }           /* 0 = EN, 1 = RU */
 void kbd_set_layout(int ru) { k_ru = ru != 0; event_push(EV_KEY, KEY_LAYOUT, 0, 0); }
 
-int (*ps2_raw_hook)(u8 sc, int ext, int press);         /* сырые клавиши для игр: вернуть 1 - клавиша съедена */
+int (*ps2_raw_hook)(u8 sc, int ext, int press);
+int (*ps2_mouse_hook)(int dx, int dy, int btn);       /* относительная мышь для игр: 1 - движение съедено */         /* сырые клавиши для игр: вернуть 1 - клавиша съедена */
 
 static void kbd_byte(u8 b)
 {

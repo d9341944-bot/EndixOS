@@ -12,6 +12,10 @@ const char *doom_error(void);
 void doom_stop(void);
 void doom_input(int sc, int ext, int press);   /* скан-коды набора 1 */
 void doom_release_all(void);
+void doom_mouse(int dx, int dy, int btn);    /* относительная мышь (можно из прерывания) */
+void doom_load_save(const char *name, const void *data, uint32_t size);   /* вернуть сохранение из диска */
+void *doom_alloc_tmp(uint32_t size);
+void doom_free_tmp(void *p);
 void *doom_alloc_wad(uint32_t size);   /* место под WAD в арене (до doom_start) */
 uint32_t doom_wad_max(void);
 /* реализует ядро / тест */

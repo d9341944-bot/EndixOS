@@ -1,5 +1,5 @@
-build=50
+build=51
 version=8.3
-size=3859628
-notes=Doom music (OPL FM synth), Doom sound
-sha256=657643260d3f7e85ee9d5a13e5d1025fc22512bc6fb3dec11f6d8202b545863e
+size=3860096
+notes=Doom: saves to disk, mouse (F12)
+sha256=0459bc40e15df57c9c29c476383895b5986d0a4346a2e40370c0f6f1dfe6beeb
