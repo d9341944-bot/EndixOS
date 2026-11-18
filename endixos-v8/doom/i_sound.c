@@ -36,7 +36,7 @@
 
 // Sound sample rate to use for digital output (Hz)
 
-int snd_samplerate = 44100;
+int snd_samplerate = 24000;
 
 // Maximum number of bytes to dedicate to allocated sound effects.
 // (Default: 64MB)
@@ -127,11 +127,11 @@ static void InitSfxModule(boolean use_sfx_prefix)
 
 // Initialize music according to snd_musicdevice.
 
+
 static void InitMusicModule(void)
 {
-#ifdef FEATURE_SOUND
-    music_module = &DG_music_module;
-#endif /* FEATURE_SOUND */
+    music_module = NULL;
+    if (music_opl_module.Init()) music_module = &music_opl_module;
 }
 
 //

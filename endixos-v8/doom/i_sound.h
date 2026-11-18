@@ -242,7 +242,7 @@ extern sound_module_t DG_sound_module;
 extern music_module_t DG_music_module;
 #endif
 extern sound_module_t sound_pcsound_module;
-extern music_module_t music_opl_module;
+extern const music_module_t music_opl_module;
 
 // For OPL module:
 
@@ -251,6 +251,14 @@ extern int opl_io_port;
 // For native music module:
 
 extern char *timidity_cfg_path;
+
+typedef enum {
+    opl_doom1_1_666,
+    opl_doom2_1_666,
+    opl_doom_1_9
+} opl_driver_ver_t;
+void I_SetOPLDriverVer(opl_driver_ver_t ver);
+void I_OPL_DevMessages(char *, size_t);
 
 #endif
 

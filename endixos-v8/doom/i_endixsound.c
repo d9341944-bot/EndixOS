@@ -21,11 +21,36 @@ static int running, use_prefix;
 static uint32_t wpos, ppos, lastp;       /* абсолютные кадры: записано, играется, позиция в кольце */
 static uint32_t last_ms;
 
-static void clear_ring(void) { memset(ring, 0, sizeof ring); }
+extern void OPL_Endix_Generate(int16_t *out, unsigned int nframes);
+extern int OPL_Endix_Active(void);
+static int16_t mbuf[RING * 2];                                   /* музыка: пишется один раз (эмулятор с состоянием), SFX поверх можно перемешивать заново */
+static uint32_t mpos;
+static int16_t mlast[2];
+
+static void music_gen_to(uint32_t upto)
+{
+    if (!OPL_Endix_Active()) return;
+    if ((int32_t)(mpos - wpos) < 0) mpos = wpos;
+    while ((int32_t)(mpos - upto) < 0) {
+        int16_t t[128 * 2];
+        OPL_Endix_Generate(t, 128);                              /* 128 кадров на 24 кГц -> 256 кадров на 48 кГц */
+        uint32_t o = (mpos % RING) * 2;
+        for (int i = 0; i < 128; i++) {
+            mbuf[o + i * 4]     = (int16_t)((mlast[0] + t[i * 2]) / 2);     mbuf[o + i * 4 + 1] = (int16_t)((mlast[1] + t[i * 2 + 1]) / 2);
+            mbuf[o + i * 4 + 2] = t[i * 2];                                  mbuf[o + i * 4 + 3] = t[i * 2 + 1];
+            mlast[0] = t[i * 2]; mlast[1] = t[i * 2 + 1];
+        }
+        mpos += 256;
+    }
+}
+
+static void clear_ring(void) { memset(ring, 0, sizeof ring); memset(mbuf, 0, sizeof mbuf); }
 
 static void mix_to(uint32_t upto)
 {
-    while (wpos != upto) {
+    music_gen_to(upto);
+    int have_m = OPL_Endix_Active();
+    while ((int32_t)(upto - wpos) > 0) {
         int l = 0, r = 0;
         for (int i = 0; i < NV; i++) {
             voice_t *v = &vo[i];
@@ -35,7 +60,8 @@ static void mix_to(uint32_t upto)
             int smp = (int)v->s[idx] - 128;
             l += smp * v->lv; r += smp * v->rv;
         }
-        l >>= 1; r >>= 1;                                        /* запас от перегрузки при многих голосах */
+        l >>= 1; r >>= 1;
+        if (have_m) { uint32_t m = (wpos % RING) * 2; l += mbuf[m]; r += mbuf[m + 1]; }                                        /* запас от перегрузки при многих голосах */
         if (l > 32767) l = 32767; else if (l < -32768) l = -32768;
         if (r > 32767) r = 32767; else if (r < -32768) r = -32768;
         uint32_t o = (wpos % RING) * 2;
@@ -47,7 +73,7 @@ static void mix_to(uint32_t upto)
 void doom_snd_resume(void)
 {
     if (!running) return;
-    clear_ring(); wpos = ppos = lastp = 0;
+    clear_ring(); wpos = ppos = lastp = mpos = 0;
     if (!doom_audio_start(ring, RING)) { /* звука нет: молча */ }
     last_ms = 0;
 }
@@ -59,10 +85,10 @@ void doom_snd_pump(void)
     uint32_t p = doom_audio_pos() % RING;
     uint32_t ms = doom_now_ms();
     if (last_ms && ms - last_ms > 450) {                         /* долгий провал (загрузка уровня): кольцо уже проиграно с мусором */
-        clear_ring(); ppos += (p + RING - lastp) % RING; wpos = ppos;
+        clear_ring(); ppos += (p + RING - lastp) % RING; wpos = mpos = ppos;
     } else ppos += (p + RING - lastp) % RING;
     lastp = p; last_ms = ms;
-    if ((int32_t)(wpos - ppos) < 0) wpos = ppos;                 /* отстали: дальше тишина */
+    if ((int32_t)(wpos - ppos) < 0 || (int32_t)(wpos - ppos) > (int32_t)RING / 2) wpos = ppos;   /* отстали или ушли вперёд: дальше тишина */
     mix_to(ppos + AHEAD);
     for (int i = 0; i < NV; i++) if (vo[i].active && vo[i].len && (uint32_t)(((uint64_t)(wpos - vo[i].start) * vo[i].step) >> 16) >= vo[i].len && (int32_t)(wpos - vo[i].start) > 0) vo[i].active = 0;
 }

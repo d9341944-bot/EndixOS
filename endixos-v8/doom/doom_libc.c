@@ -391,3 +391,16 @@ __asm__(".text\n.globl doom_setjmp\ndoom_setjmp:\n"
 void doom_leave(int code) { doom_longjmp(code ? code : 1); }
 void exit(int c) { doom_exit_hook(c); doom_leave(c ? c : 1); }
 void abort(void) { exit(-1); }
+
+/* Помощники, которых ждёт код Chocolate Doom (midifile.c, i_oplmusic.c, mus2mid.c) */
+uint32_t SDL_SwapBE32(uint32_t v) { return (v >> 24) | ((v >> 8) & 0xff00) | ((v << 8) & 0xff0000) | (v << 24); }
+uint16_t SDL_SwapBE16(uint16_t v) { return (uint16_t)((v >> 8) | (v << 8)); }
+FILE *M_fopen(const char *p, const char *m) { return fopen(p, m); }
+int M_remove(const char *p) { return remove(p); }
+extern void I_Error(const char *error, ...);
+void *I_Realloc(void *p, size_t n)
+{
+    void *r = realloc(p, n);
+    if (!r && n) I_Error("I_Realloc: failed on reallocation of %i bytes", (int)n);
+    return r;
+}

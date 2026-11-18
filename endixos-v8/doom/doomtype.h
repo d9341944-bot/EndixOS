@@ -48,6 +48,7 @@
 
 #ifdef __GNUC__
 #define PACKEDATTR __attribute__((packed))
+#define PACKED_STRUCT(...) struct __VA_ARGS__ __attribute__((packed))
 #else
 #define PACKEDATTR
 #endif

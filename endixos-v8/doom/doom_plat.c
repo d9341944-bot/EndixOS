@@ -72,14 +72,14 @@ void *doom_alloc_wad(uint32_t size) { if (!started) { doom_mem_init(arena, ARENA
 
 int doom_start(const void *wad, uint32_t wadsize, const char *wadname)
 {
-    static char *argv[] = { "doom", "-iwad", "doom.wad", "-nomusic", 0 };
+    static char *argv[] = { "doom", "-iwad", "doom.wad", 0 };
     if (!started) { doom_mem_init(arena, ARENA); started = 1; }
     err[0] = 0; qh = qt = 0; memset(held, 0, sizeof held);
     doom_files_reset();
     doom_file_add("doom.wad", wad, wadsize); (void)wadname;
     alive = 1;
     if (doom_setjmp()) { alive = 0; if (!err[0]) strcpy(err, "Doom stopped"); return -1; }
-    doomgeneric_Create(4, argv);
+    doomgeneric_Create(3, argv);
     return 0;
 }
 void doom_frame(void)

@@ -1,5 +1,5 @@
-build=49
+build=50
 version=8.3
-size=3805052
-notes=Doom sound effects (HDA), Doom app
-sha256=2424016710b543f4e82010ce26f72eb6cb84161c05869ddd8b933b01ae86d7a0
+size=3859628
+notes=Doom music (OPL FM synth), Doom sound
+sha256=657643260d3f7e85ee9d5a13e5d1025fc22512bc6fb3dec11f6d8202b545863e
