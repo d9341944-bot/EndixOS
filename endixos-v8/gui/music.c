@@ -263,6 +263,13 @@ static void toggle(void)
 static void step(int d) { if (!ntr) return; int k = cur < 0 ? 0 : (cur + d + ntr) % ntr; play_track(k); }
 
 int music_playing(void) { return playing; }
+/* Для виджета: что сейчас выбрано и сколько проиграно (0..100). */
+const char *music_now(int *pct, const char **sub)
+{
+    if (pct) { u32 p = pos_frames(); *pct = nframes ? (int)((u64)(p > nframes ? nframes : p) * 100 / nframes) : 0; }
+    if (sub) *sub = cur >= 0 && cur < ntr ? tr[cur].sub : "";
+    return cur >= 0 && cur < ntr ? tr[cur].title : "";
+}
 
 int music_tick(u32 ticks, int visible)
 {

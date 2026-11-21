@@ -27,8 +27,7 @@ typedef struct {
     u32 magic;
     u8  ver, wall, dark, accent, magnify, zoom, hide, clock24, reduce;
     u8  glass[GLASS_PARAMS];
-    u8  widgets;
-    u8  wpos[8];
+    u8  wsave[WIDGETS_SAVE];
     u8  ccl[16];
     u8  noupd;                                   /* 1 - автопроверка обновлений выключена */
     u8  perf;                                    /* режим скорости (PERF_*) */
@@ -42,7 +41,7 @@ typedef struct {
     u8  ts_ok, ts_auto, ts_tz;                   /* время: ts_ok = 0xA5, когда заданы; пояс в четвертях часа + 64, автосинхронизация */
     u8  lg_ok, lg_ui, lg_kb;                     /* язык: lg_ok = 0xA5, когда заданы; язык интерфейса и раскладка при старте */
     char ssid2[3][33], pass2[3][64];             /* ещё три запомненные Wi-Fi сети (старые файлы: нули) */
-    u8  pad[512 - 3 * 33 - 3 * 64 - 3 - 3 - 4 - 9 - GLASS_PARAMS - 1 - 8 - 16 - 1 - 1 - 1 - 1 - 33 - 64 - 1 - 1 - 4 - 4];
+    u8  pad[512 - 3 * 33 - 3 * 64 - 3 - 3 - 4 - WIDGETS_SAVE - GLASS_PARAMS - 1 - 8 - 16 - 1 - 1 - 1 - 1 - 33 - 64 - 1 - 1 - 4 - 4];
 } blob_t;
 
 __attribute__((weak)) fat_t *res_mount(void) { return 0; }
@@ -68,8 +67,7 @@ static void gather(blob_t *b)
     b->clock24 = (u8)wm_get_option(WM_OPT_CLOCK24);
     b->reduce = (u8)wm_get_option(WM_OPT_REDUCE_TRANSP);
     for (int i = 0; i < GLASS_PARAMS; i++) b->glass[i] = (u8)fb_glass_param_get(i);
-    b->widgets = (u8)widgets_get_mask();
-    widgets_get_pos(b->wpos);
+    widgets_save(b->wsave);
     cc_get_layout(b->ccl);
     b->noupd = (u8)!update_auto();
     b->perf = (u8)perf_mode();
@@ -101,8 +99,7 @@ static void apply(const blob_t *b)
     wm_set_option(WM_OPT_CLOCK24, b->clock24);
     wm_set_option(WM_OPT_REDUCE_TRANSP, b->reduce);
     for (int i = 0; i < GLASS_PARAMS; i++) fb_glass_param_set(i, b->glass[i]);
-    widgets_set_mask(b->widgets);
-    widgets_set_pos(b->wpos);
+    widgets_load(b->wsave);
     cc_set_layout(b->ccl);
     update_set_auto(!b->noupd);
     perf_set_mode(b->perf);

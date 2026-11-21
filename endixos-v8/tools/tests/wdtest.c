@@ -23,30 +23,28 @@ int main(int argc, char **argv)
     if (fb_init((u32)(unsigned long)vram, 1024 * 4, 1024, 768, 32)) return 2;
     static sysinfo_t info = { "Atom", 128, 1024, 768 };
     wm_init(&info); wm_set_time(16, 35, 2, 11, 2026);
-    u8 p0[8]; widgets_get_pos(p0);
-    printf("start pos: clock %d,%d cal %d,%d sys %d,%d\n", p0[0]*8, p0[1]*8, p0[2]*8, p0[3]*8, p0[4]*8, p0[5]*8);
+    CHECK(widgets_count() == 3, "по умолчанию 3 виджета");
+    ticks(100); frame("d0");
     widgets_edit_start(); ticks(80); frame("e0");
-    drag(100, 100, 480, 300);                       /* часы -> в центр */
-    u8 p1[8]; widgets_get_pos(p1);
-    printf("after: clock %d,%d\n", p1[0]*8, p1[1]*8);
-    CHECK(p1[0]*8 > 300 && p1[1]*8 > 150, "часы перенесены");
-    drag(100, 250, 480, 300);                       /* календарь на часы: вернётся */
-    u8 p2[8]; widgets_get_pos(p2);
-    CHECK(p2[2] == p0[2] && p2[3] == p0[3], "наложение: виджет вернулся на место");
-    drag(100, 250, 300, 740);                       /* под Dock: вернётся */
-    widgets_get_pos(p2);
-    CHECK(p2[2] == p0[2] && p2[3] == p0[3], "под Dock: вернулся");
-    drag(100, 250, 640, 470);
-    widgets_get_pos(p2); CHECK(p2[2]*8 > 450, "календарь перенесён вправо");
-    CHECK(widgets_pos_dirty() == 1 && widgets_pos_dirty() == 0, "pos_dirty взводится один раз");
-    drag(640, 470, 800, 100);
-    { u8 q[8]; widgets_get_pos(q); CHECK(q[2]*8 > 450 && q[2]*8 < 700, "под галереей: вернулся"); }
-    frame("e1");
-    u8 save[8]; widgets_get_pos(save);
-    widgets_set_mask(0); widgets_set_mask(7); widgets_set_pos(save);
-    u8 p3[8]; widgets_get_pos(p3);
-    int same = 1; for (int i = 0; i < 6; i++) if (p3[i] != save[i]) same = 0;
-    CHECK(same, "сохранение/загрузка мест");
+    /* добавить каждый тип в каждом допустимом размере через галерею */
+    int n0 = widgets_count();
+    for (int k = 0; k < 8; k++) { widgets_edit_key(0x102); widgets_edit_key('\n'); ticks(10); }
+    CHECK(widgets_count() > n0, "виджеты добавляются из галереи");
+    ticks(60); frame("e1");
+    u8 save[WIDGETS_SAVE]; widgets_save(save);
+    CHECK(save[0] == 0xA5, "маркер сохранения");
+    int cnt = widgets_count();
+    for (int i = 0; i < 11; i++) widgets_remove(i);
+    CHECK(widgets_count() == 0, "все удалены");
+    widgets_load(save);
+    CHECK(widgets_count() == cnt, "загрузка вернула все виджеты");
+    u8 s2[WIDGETS_SAVE]; widgets_save(s2);
+    int same = 1; for (int i = 0; i < WIDGETS_SAVE; i++) if (save[i] != s2[i]) same = 0;
+    CHECK(same, "сохранение/загрузка раскладки совпадает");
+    u8 z[WIDGETS_SAVE] = {0}; widgets_load(z);
+    CHECK(widgets_count() == cnt, "пустой блок настроек игнорируется");
+    CHECK(widgets_resize(0, 1) >= 0, "resize не падает");
+    for (int s = 0; s < 3; s++) for (int i = 0; i < 11; i++) widgets_resize(i, s);
     widgets_edit_stop(); ticks(80); frame("e2");
     printf("fails=%d\n", fails); return fails;
 }

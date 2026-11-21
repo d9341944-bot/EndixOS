@@ -2,7 +2,9 @@
 #define ENDIX_NOTES_H
 #include "../kernel/types.h"
 /* Два редактора на одном движке: Notes (одна заметка) и TextEdit (любой текстовый файл из Files). */
-void notes_init(void);                       /* загрузить сохранённые заметки */
+void notes_init(void);
+const char *notes_preview(void);              /* текст заметки для виджета */
+
 int  notes_key(i32 key, int ctrl);           /* 1 - нужна перерисовка */
 int  notes_click(i32 x, i32 y);              /* координаты относительно содержимого окна */
 int  notes_tick(u32 ticks, int visible);     /* автосохранение и мигание курсора; 1 - перерисовать */

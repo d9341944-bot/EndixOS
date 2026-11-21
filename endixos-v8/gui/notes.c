@@ -31,6 +31,7 @@ static ed_t NT = { .view_w = 520, .view_h = 400, .node = -1 }, TE = { .view_w = 
 static ed_t *E = &NT;
 static u32 now_t;
 static i32 adv[200];
+const char *notes_preview(void) { return NT.loaded ? NT.txt : ""; }
 #define txt (E->txt)
 #define len (E->len)
 #define cur (E->cur)
@@ -149,6 +150,7 @@ static void save(void)
     if (f) fat_write(f, "/boot/notes.txt", (const u8 *)txt, (u32)len);
     dirty = 0; saved_t = now_t;
 }
+
 
 void notes_init(void)
 {

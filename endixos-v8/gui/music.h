@@ -12,4 +12,5 @@ int  music_wheel(int d);
 int  music_tick(u32 ticks, int visible);        /* продвигает время и переключает трек; 1 - перерисовать */
 void music_draw(i32 x, i32 y, i32 w, i32 h);
 int  music_playing(void);
+const char *music_now(int *pct, const char **sub);   /* название выбранного трека ("" - нет) и процент проигранного */
 #endif

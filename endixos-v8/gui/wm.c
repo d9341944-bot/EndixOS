@@ -3001,6 +3001,7 @@ static void desktop_action(int act)
     case DK_ACT_GLASS:     settings_show_page(2); open_window(APP_SETTINGS); break;
     case DK_ACT_EDITWIDGETS: widgets_edit_start(); break;
     case DK_ACT_REMOVEWIDGET: widgets_remove(desktop_ctx_widget()); break;
+    case DK_ACT_WSIZE0: case DK_ACT_WSIZE1: case DK_ACT_WSIZE2: widgets_resize(desktop_ctx_widget(), act - DK_ACT_WSIZE0); break;
     case DK_ACT_OPENICON: {
         int n = desktop_ctx_node();
         if (n >= 0 && fs_valid(n)) {
@@ -3361,7 +3362,7 @@ void wm_handle_event(const event_t *e)
             return;
         }
         if (widgets_edit_active()) {
-            if (e->a == 27) widgets_edit_stop();
+            if (e->a == 27) widgets_edit_stop(); else widgets_edit_key(e->a);
             return;
         }
         if (mc_on) {

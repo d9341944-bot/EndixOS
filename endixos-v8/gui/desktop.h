@@ -15,7 +15,7 @@ void desktop_select(int node);
 void desktop_ctx_open_icon(i32 x, i32 y, int node);  /* меню значка: Open, Delete */
 int  desktop_ctx_node(void);
 
-enum { DK_ACT_NONE, DK_ACT_NEWFOLDER, DK_ACT_WALLPAPER, DK_ACT_APPEAR, DK_ACT_GLASS, DK_ACT_EDITWIDGETS, DK_ACT_REMOVEWIDGET, DK_ACT_OPENICON, DK_ACT_DELETEICON };
+enum { DK_ACT_NONE, DK_ACT_NEWFOLDER, DK_ACT_WALLPAPER, DK_ACT_APPEAR, DK_ACT_GLASS, DK_ACT_EDITWIDGETS, DK_ACT_REMOVEWIDGET, DK_ACT_OPENICON, DK_ACT_DELETEICON, DK_ACT_WSIZE0, DK_ACT_WSIZE1, DK_ACT_WSIZE2 };
 
 void desktop_ctx_open(i32 x, i32 y);
 void desktop_ctx_open_widget(i32 x, i32 y, int idx);   /* меню виджета: Remove, Edit Widgets */

@@ -159,7 +159,7 @@ The installed grub.cfg passes `installed` to the kernel. On such a boot the kern
 Host-tested (tools/tests/lgtest.c) on the RAM-disk image made by the installer test; not yet tried on real hardware.
 
 ## Moving widgets
-Desktop → right click → Edit Widgets (or Esc to leave). In edit mode drag any widget: it lifts with a deeper shadow, snaps to a 6 px grid (and to the left column), and settles with an animation. Dropping on another widget, on the widget gallery or under the Dock puts it back. Places are saved with the other settings. Test: tools/tests/wdtest.c.
+Desktop → right click → Edit Widgets (or Esc). macOS-style (build 52): sizes Small 148x148 / Medium 308x148 / Large 308x308, up to 11 instances. Types: Clock, Calendar, System, Battery, Music, Notes, Wi-Fi, World Clock. Editor: dimmed desktop, "−" badges, drag with 6 px grid/left magnet, glass gallery on the right (type list, Small/Medium/Large control, live preview, "+" or click on preview or Enter adds at first free spot; arrows pick type/size). Context menu: Small/Medium/Large/Remove/Edit Widgets. Saved in prefs as `wsave[34]` (marker 0xA5 + 11x3 bytes); old prefs without marker keep the default layout (Clock S, Calendar S, System M). Test: tools/tests/wdtest.c (needs stubs for net_*/sta_*, see build 52 commit).
 
 ## Where is the installer?
 Apple menu → "Install EndixOS...", or Spotlight ("install"), or Terminal `install`. On a live USB boot a notification points to it. The USB `grub.cfg` must have the `module /boot/endixos.elf endixos.elf` line (the one in this archive has it), otherwise the installer says the kernel image is not available.

@@ -179,10 +179,11 @@ static void set_items(int widget)
         cm_n = 5;
         cm_sep = (1 << 1) | (1 << 4);
     } else {
-        cm_text[0] = "Remove Widget"; cm_act[0] = DK_ACT_REMOVEWIDGET;
-        cm_text[1] = "Edit Widgets..."; cm_act[1] = DK_ACT_EDITWIDGETS;
-        cm_n = 2;
-        cm_sep = 1 << 1;
+        static const char *const tx[5] = { "Small", "Medium", "Large", "Remove Widget", "Edit Widgets..." };
+        static const int ac[5] = { DK_ACT_WSIZE0, DK_ACT_WSIZE1, DK_ACT_WSIZE2, DK_ACT_REMOVEWIDGET, DK_ACT_EDITWIDGETS };
+        for (int i = 0; i < 5; i++) { cm_text[i] = tx[i]; cm_act[i] = ac[i]; }
+        cm_n = 5;
+        cm_sep = 1 << 3;
     }
 }
 

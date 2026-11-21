@@ -1,5 +1,5 @@
-build=51
+build=52
 version=8.3
-size=3860096
-notes=Doom: saves to disk, mouse (F12)
-sha256=0459bc40e15df57c9c29c476383895b5986d0a4346a2e40370c0f6f1dfe6beeb
+size=3872656
+notes=New widgets: Battery, Music, Notes, Wi-Fi, World Clock|Widget sizes Small/Medium/Large|macOS-style widget gallery editor
+sha256=e55dd50cfa862efece5d7f0d9e6a949eb483f8f31ef145ae2d30694bd8bb4a1d
