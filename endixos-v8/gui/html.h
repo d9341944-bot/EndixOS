@@ -27,7 +27,7 @@ const hbox_t *html_box(int i);
 const char *html_title(void);                                     /* "" если нет */
 const char *html_link_url(int id);                                /* абсолютный адрес или 0 */
 int  html_link_at(i32 x, i32 y);                                  /* номер ссылки под точкой страницы или -1 */
-int  html_image_count(void);                                      /* картинки страницы (до 16) */
+int  html_image_count(void);                                      /* картинки страницы (до 32) */
 const char *html_image_url(int i);
 int  html_image_state(int i);                                     /* 0 ждёт, 1 готова, 2 не вышло */
 void html_image_set(int i, int nw, int nh);                       /* настоящий размер; nw <= 0 - не вышло. Потом нужен html_layout */

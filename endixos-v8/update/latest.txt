@@ -1,5 +1,5 @@
-build=55
+build=56
 version=8.3
-size=3889944
-notes=Browix: new start page with Favorites|Wallpapers: wallhaven.cc built into the browser, click to save into Pictures (type 'wh cats')|Screenshots to clipboard, update usb
-sha256=2ec8d529012b8b058f63922007908df70b87a11b1386a8ced77b02a0d6ae9236
+size=3902744
+notes=Wallpapers: full catalog with search, filters, 24 per page and page numbers|Browix start page|Screenshots to clipboard, update usb
+sha256=5184e92f1f8757d1265d10597a5cfbceff83a02bc6bc2cdcf9bb9f103e88a80d

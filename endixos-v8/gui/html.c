@@ -12,7 +12,7 @@
 
 enum { N_WORD, N_BR, N_PARA, N_HR, N_INDENT, N_BULLET, N_ALIGN, N_PRE, N_QUOTE, N_GAP, N_IMG, N_TBL, N_TR, N_TD, N_TEND, N_BGO, N_BGC };
 
-#define MAXIMG 16
+#define MAXIMG 32
 typedef struct { u32 url, alt; u16 aw, ah; i16 nw, nh; u8 state; } img_t;      /* state: 0 ждёт, 1 готова, 2 не вышло */
 static img_t imgs[MAXIMG]; static int nimg;
 enum { F_SP = 1, F_ULINE = 2 };

@@ -24,7 +24,7 @@ static u8 pagebuf[PAGE_BUF];
 #define IPOOL   (3 * 1024 * 1024)                  /* слов: ~12 МБ готовых пикселей на страницу */
 static u8 imgbuf[IMG_BUF];
 static u32 ipool[IPOOL]; static u32 ipool_n;
-static struct { u32 off; i16 w, h; i32 a; } idec[16];
+static struct { u32 off; i16 w, h; i32 a; } idec[32];
 static int iq_cur = -1, iq_next = 1 << 20;        /* какая картинка качается / какая следующая */
 static u32 page_bg_c = 0xFFFFFF; static int page_dark;
 static void img_reset(void);
@@ -51,7 +51,7 @@ static u32 page_len; static int page_plain, src_view;      /* исходник �
 
 static int home_mode, home_hover = -1;                  /* нативная стартовая страница */
 static int gen_wp;                                      /* загружается ответ API обоев: из JSON строим страницу */
-static char gen[16384];
+static char gen[32768];
 #define DL_BUF (8u << 20)
 static u8 dlbuf[DL_BUF];
 static u32 dlpix[1280 * 720];
@@ -174,7 +174,7 @@ static void home_draw(i32 x, i32 py)
         font_draw(tx + (TILE_W - w) / 2, ty + 78, tiles[i].name, th->text, FONT_REGULAR);
     }
     i32 ny = py + gy + ((NTILE + c - 1) / c) * TILE_H + 8;
-    if (ny + 20 < py + vh) font_draw(x + gx + 4, ny, "Type wh cats in the address bar to search wallpapers.", th->sub, FONT_REGULAR);
+    if (ny + 20 < py + vh) font_draw(x + gx + 4, ny, "Wallpapers: a Wallhaven catalog. Type wh cats in the address bar to search.", th->sub, FONT_REGULAR);
 }
 
 /* ---------- обои: Wallhaven API -> страница ---------- */
@@ -211,60 +211,135 @@ static int url_param(const char *u, const char *key, char *out, u32 cap)
 }
 static int is_safe_q(const char *q) { for (; *q; q++) if (!((*q >= 'a' && *q <= 'z') || (*q >= 'A' && *q <= 'Z') || (*q >= '0' && *q <= '9') || *q == '+' || *q == '-' || *q == '_' || *q == '.' || *q == '%')) return 0; return 1; }
 
+typedef struct { char q[64], s[16], t[4], c[4], r[8], a[8]; int p; } wp_t;
+static const char *const WS_[] = { "toplist", "date_added", "random", "views", "favorites", "relevance" };
+static const char *const WS_N[] = { "Toplist", "Latest", "Random", "Most viewed", "Favorites", "Relevance" };
+static const char *const WT_[] = { "1d", "3d", "1w", "1M", "3M", "6M", "1y" };
+static const char *const WT_N[] = { "Day", "3 days", "Week", "Month", "3 months", "6 months", "Year" };
+static const char *const WR_[] = { "fit", "720", "1080", "1366", "1280", "any" };
+static const char *const WR_N[] = { "Fits netbook", "1280x720", "1920x1080", "1366x768", "1280x800", "Any (big files)" };
+static const char *const WRES[] = { "1920x1080,1366x768,1280x720,1280x800,1600x900,1024x768", "1280x720", "1920x1080", "1366x768", "1280x800", "" };
+static const char *const WA_[] = { "0", "16x9", "16x10", "4x3", "21x9" };
+static const char *const WA_N[] = { "Any ratio", "16:9", "16:10", "4:3", "21:9" };
+static int pick(const char *v, const char *const *list, int n) { for (int i = 0; i < n; i++) if (seq(v, list[i])) return i; return -1; }
+
+static void wp_parse(const char *u, wp_t *w)
+{
+    char pg[8];
+    url_param(u, "q", w->q, sizeof w->q); url_param(u, "s", w->s, sizeof w->s); url_param(u, "t", w->t, sizeof w->t);
+    url_param(u, "c", w->c, sizeof w->c); url_param(u, "r", w->r, sizeof w->r); url_param(u, "a", w->a, sizeof w->a); url_param(u, "p", pg, sizeof pg);
+    if (!is_safe_q(w->q)) w->q[0] = 0;
+    if (pick(w->s, WS_, 6) < 0) scpy(w->s, w->q[0] ? "relevance" : "toplist", sizeof w->s);
+    if (pick(w->t, WT_, 7) < 0) scpy(w->t, "1M", sizeof w->t);
+    if (pick(w->r, WR_, 6) < 0) scpy(w->r, "fit", sizeof w->r);
+    if (pick(w->a, WA_, 5) < 0) scpy(w->a, "0", sizeof w->a);
+    int ok = slen(w->c) == 3; for (int i = 0; ok && i < 3; i++) if (w->c[i] != '0' && w->c[i] != '1') ok = 0;
+    if (!ok || seq(w->c, "000")) scpy(w->c, "111", sizeof w->c);
+    int p = 0; for (int i = 0; pg[i] >= '0' && pg[i] <= '9' && i < 4; i++) p = p * 10 + (pg[i] - '0');
+    w->p = p < 1 ? 1 : p > 9999 ? 9999 : p;
+}
+static u32 wp_href(char *o, u32 cap, const wp_t *w)
+{
+    char t[8]; int v = w->p, l = 0, d[5], n = 0;
+    do { d[n++] = v % 10; v /= 10; } while (v);
+    while (n) t[l++] = (char)('0' + d[--n]);
+    t[l] = 0;
+    scpy(o, "endix://wallpapers?s=", cap); u32 k = slen(o);
+    const char *parts[] = { w->s, "&t=", w->t, "&c=", w->c, "&r=", w->r, "&a=", w->a, "&p=", t, w->q[0] ? "&q=" : "", w->q };
+    for (u32 i = 0; i < sizeof parts / sizeof *parts; i++) { scpy(o + k, parts[i], cap - k); k = slen(o); }
+    return k;
+}
 static void wp_api_url(const char *u, char *out, u32 cap)
 {
-    char q[64], sv[16], pg[8];
-    url_param(u, "q", q, sizeof q); url_param(u, "s", sv, sizeof sv); url_param(u, "p", pg, sizeof pg);
-    if (!is_safe_q(q)) q[0] = 0;
-    if (!(seq(sv, "toplist") || seq(sv, "random") || seq(sv, "date_added") || seq(sv, "views") || seq(sv, "favorites"))) scpy(sv, "toplist", sizeof sv);
-    if (!pg[0] || pg[0] < '1' || pg[0] > '9' || slen(pg) > 3) scpy(pg, "1", sizeof pg);
-    scpy(out, "https://wallhaven.cc/api/v1/search?categories=111&purity=100&resolutions=1920x1080,1366x768,1280x720,1280x800,1600x900,1024x768&sorting=", cap);
-    u32 l = slen(out); scpy(out + l, sv, cap - l); l = slen(out);
-    scpy(out + l, "&page=", cap - l); l = slen(out); scpy(out + l, pg, cap - l); l = slen(out);
-    if (q[0]) { scpy(out + l, "&q=", cap - l); l = slen(out); scpy(out + l, q, cap - l); }
+    wp_t w; wp_parse(u, &w);
+    char pg[8]; { int v = w.p, l = 0, d[5], n = 0; do { d[n++] = v % 10; v /= 10; } while (v); while (n) pg[l++] = (char)('0' + d[--n]); pg[l] = 0; }
+    scpy(out, "https://wallhaven.cc/api/v1/search?purity=100&order=desc&categories=", cap);
+    const char *parts[] = { w.c, "&sorting=", w.s, "&page=", pg };
+    for (u32 i = 0; i < sizeof parts / sizeof *parts; i++) { u32 k = slen(out); scpy(out + k, parts[i], cap - k); }
+    u32 k = slen(out);
+    if (seq(w.s, "toplist")) { scpy(out + k, "&topRange=", cap - k); k = slen(out); scpy(out + k, w.t, cap - k); k = slen(out); }
+    int ri = pick(w.r, WR_, 6);
+    if (ri == 5) { scpy(out + k, "&atleast=1024x600", cap - k); k = slen(out); }
+    else { scpy(out + k, "&resolutions=", cap - k); k = slen(out); scpy(out + k, WRES[ri], cap - k); k = slen(out); }
+    if (!seq(w.a, "0")) { scpy(out + k, "&ratios=", cap - k); k = slen(out); scpy(out + k, w.a, cap - k); k = slen(out); }
+    if (w.q[0]) { scpy(out + k, "&q=", cap - k); scpy(out + k + 3, w.q, cap - k - 3); }
+}
+static long jnum(const char *p, const char *end, const char *key)
+{
+    u32 kl = slen(key);
+    for (; p + kl + 4 < end; p++) {
+        if (p[0] != '"') continue;
+        u32 i = 0; while (i < kl && p[1 + i] == key[i]) i++;
+        if (i == kl && p[1 + kl] == '"' && p[2 + kl] == ':') { const char *q = p + 3 + kl; long v = 0; if (*q < '0' || *q > '9') return -1; while (*q >= '0' && *q <= '9') v = v * 10 + (*q++ - '0'); return v; }
+    }
+    return -1;
+}
+static u32 napp(u32 n, long v) { char b[16]; int l = 0, d[12], k = 0; if (v < 0) v = 0; do { d[k++] = (int)(v % 10); v /= 10; } while (v); while (k) { b[l++] = (char)('0' + d[--k]); if (k % 3 == 0 && k) b[l++] = ','; } b[l] = 0; return gapp(n, b); }
+static u32 wp_row(u32 n, const char *label, const char *const *names, const char *const *vals, int cnt, const char *cur, const wp_t *w, char which)
+{
+    n = gapp(n, "<b>"); n = gapp(n, label); n = gapp(n, ":</b> ");
+    for (int i = 0; i < cnt; i++) {
+        wp_t x = *w; x.p = 1;
+        if (which == 's') scpy(x.s, vals[i], sizeof x.s); else if (which == 't') scpy(x.t, vals[i], sizeof x.t);
+        else if (which == 'r') scpy(x.r, vals[i], sizeof x.r); else scpy(x.a, vals[i], sizeof x.a);
+        if (seq(cur, vals[i])) { n = gapp(n, "[<b>"); n = gapp(n, names[i]); n = gapp(n, "</b>] "); continue; }
+        char h[300]; wp_href(h, sizeof h, &x);
+        n = gapp(n, "<a href=\"") ; n = gapp(n, h); n = gapp(n, "\">"); n = gapp(n, names[i]); n = gapp(n, "</a> ");
+    }
+    return gapp(n, "<br>");
 }
 
 static void wp_page_html(const char *json, u32 len, const char *u)
 {
-    char q[64], sv[16], pg[8], t[300], id[16], res[20], path[160], th[160];
-    url_param(u, "q", q, sizeof q); url_param(u, "s", sv, sizeof sv); url_param(u, "p", pg, sizeof pg);
-    int page = pg[0] >= '1' && pg[0] <= '9' ? (int)(pg[0] - '0') + (pg[1] ? 10 * (pg[0] - '0') + (pg[1] - '0') - (pg[0] - '0') : 0) : 1;
-    if (pg[0] && pg[1]) page = (pg[0] - '0') * 10 + (pg[1] - '0');
-    if (pg[0] && pg[1] && pg[2]) page = page * 10 + (pg[2] - '0');
-    u32 n = gapp(0, "<title>Wallpapers</title><h1>Wallpapers</h1><p>From wallhaven.cc. Click a picture to save it to Pictures (then pick it in Settings > Desktop & Dock > Photos). Search: type <b>wh</b> and a word in the address bar.</p><p>");
-    static const char *const cats[][2] = { { "Top", "s=toplist" }, { "Latest", "s=date_added" }, { "Random", "s=random" }, { "Most viewed", "s=views" },
-        { "Nature", "q=nature" }, { "Space", "q=space" }, { "Cars", "q=cars" }, { "Anime", "q=anime" }, { "City", "q=city" }, { "Minimal", "q=minimal" }, { "Abstract", "q=abstract" }, { "Dark", "q=dark" } };
-    for (int i = 0; i < 12; i++) { n = gapp(n, "<a href=\"endix://wallpapers?"); n = gapp(n, cats[i][1]); n = gapp(n, "\">"); n = gapp(n, cats[i][0]); n = gapp(n, "</a> "); }
+    wp_t w; wp_parse(u, &w);
+    char id[16], res[20], path[160], th[160], h[300];
+    const char *end = json + len, *p = json;
+    long total = jnum(json, end, "total"), last = jnum(json, end, "last_page");
+    u32 n = gapp(0, "<title>Wallpapers</title><h1>Wallpapers</h1><p>Wallhaven catalog (SFW). Search: type <b>wh</b> and a word in the address bar, e.g. <b>wh mountains</b>. Click a picture to save it into Pictures.</p><p>");
+    n = wp_row(n, "Sort", WS_N, WS_, 6, w.s, &w, 's');
+    if (seq(w.s, "toplist")) n = wp_row(n, "Range", WT_N, WT_, 7, w.t, &w, 't');
+    n = gapp(n, "<b>Categories:</b> ");
+    { static const char *cn[3] = { "General", "Anime", "People" };
+      for (int i = 0; i < 3; i++) { wp_t x = w; x.p = 1; x.c[i] = x.c[i] == '1' ? '0' : '1'; if (seq(x.c, "000")) x.c[i] = '1';
+        wp_href(h, sizeof h, &x); n = gapp(n, w.c[i] == '1' ? "[<b>" : ""); n = gapp(n, "<a href=\""); n = gapp(n, h); n = gapp(n, "\">"); n = gapp(n, cn[i]); n = gapp(n, "</a>"); n = gapp(n, w.c[i] == '1' ? "</b>] " : " "); } }
+    n = gapp(n, "<br>");
+    n = wp_row(n, "Size", WR_N, WR_, 6, w.r, &w, 'r');
+    n = wp_row(n, "Ratio", WA_N, WA_, 5, w.a, &w, 'a');
+    n = gapp(n, "<b>Tags:</b> ");
+    { static const char *const tg[] = { "nature", "space", "cars", "anime", "city", "minimal", "abstract", "dark", "mountains", "ocean", "forest", "cyberpunk", "neon", "sunset", "cats", "landscape", "gaming", "architecture", "flowers", "stars", "retro", "japan", "winter", "desert" };
+      for (u32 i = 0; i < sizeof tg / sizeof *tg; i++) { wp_t x = w; x.p = 1; scpy(x.q, tg[i], sizeof x.q); if (seq(x.s, "toplist") && 0) {} wp_href(h, sizeof h, &x); n = gapp(n, "<a href=\""); n = gapp(n, h); n = gapp(n, "\">"); n = gapp(n, tg[i]); n = gapp(n, "</a> "); } }
+    if (w.q[0]) { n = gapp(n, "<br><b>Search:</b> "); n = gapp(n, w.q); n = gapp(n, " "); wp_t x = w; x.p = 1; x.q[0] = 0; if (seq(x.s, "relevance")) scpy(x.s, "toplist", sizeof x.s); wp_href(h, sizeof h, &x); n = gapp(n, "<a href=\""); n = gapp(n, h); n = gapp(n, "\">clear</a>"); }
     n = gapp(n, "</p><p>");
-    const char *end = json + len, *p = json; int shown = 0;
-    const char *meta = jfind(json, end, "last_page");
-    (void)meta;
-    while (shown < 12 && (p = jfind(p, end, "id")) != 0) {
+    if (total >= 0) { n = napp(n, total); n = gapp(n, " wallpapers"); if (last > 0) { n = gapp(n, ", page "); n = napp(n, w.p); n = gapp(n, " of "); n = napp(n, last); } n = gapp(n, "<br>"); }
+    int shown = 0;
+    while (shown < 24 && (p = jfind(p, end, "id")) != 0) {
         jstr(p, id, sizeof id);
         const char *nx = jfind(p, end, "id"); const char *lim = nx ? nx : end;
         const char *r = jfind(p, lim, "resolution"), *pa = jfind(p, lim, "path"), *sm = jfind(p, lim, "small");
-        p = lim;
+        p = nx ? nx - 6 : end;                                   /* на ключ следующего "id" */
         if (!pa || !sm || !id[0]) continue;
         jstr(pa, path, sizeof path); jstr(sm, th, sizeof th);
         if (r) jstr(r, res, sizeof res); else res[0] = 0;
         for (u32 k = 0; id[k]; k++) if (!((id[k] >= 'a' && id[k] <= 'z') || (id[k] >= '0' && id[k] <= '9'))) id[0] = 0;
         if (!id[0] || !starts(path, "https://") || !starts(th, "https://")) continue;
         n = gapp(n, "<a href=\"endix://dl?id="); n = gapp(n, id); n = gapp(n, "&u="); n = gapp(n, path); n = gapp(n, "\"><img src=\""); n = gapp(n, th);
-        n = gapp(n, "\" width=\"220\" alt=\""); n = gapp(n, res); n = gapp(n, "\"></a> ");
+        n = gapp(n, "\" width=\"196\" alt=\""); n = gapp(n, res); n = gapp(n, "\"></a> ");
         shown++;
     }
-    if (!shown) n = gapp(n, "Nothing found. Try another word or category.");
+    if (!shown) n = gapp(n, "Nothing found. Try another word, category or size.");
     n = gapp(n, "</p><p>");
-    t[0] = 0;
-    {   char np[8]; u32 l = 0; int pv = page > 1 ? page - 1 : 0, nxp = page + 1;
-        for (int k = 0; k < 2; k++) {
-            int v = k ? nxp : pv; if (!v) continue;
-            l = 0; if (v >= 100) np[l++] = (char)('0' + v / 100 % 10); if (v >= 10) np[l++] = (char)('0' + v / 10 % 10); np[l++] = (char)('0' + v % 10); np[l] = 0;
-            n = gapp(n, "<a href=\"endix://wallpapers?p="); n = gapp(n, np);
-            if (sv[0]) { n = gapp(n, "&s="); n = gapp(n, sv); }
-            if (q[0]) { n = gapp(n, "&q="); n = gapp(n, q); }
-            n = gapp(n, k ? "\">Next page</a> " : "\">Previous page</a> ");
+    if (last < 1) last = w.p + 1;
+    if (last > 9999) last = 9999;
+    {   int from = w.p - 3 < 1 ? 1 : w.p - 3, to = w.p + 3 > last ? (int)last : w.p + 3;
+        wp_t x = w;
+        if (w.p > 1) { x.p = w.p - 1; wp_href(h, sizeof h, &x); n = gapp(n, "<a href=\""); n = gapp(n, h); n = gapp(n, "\">Previous</a> "); }
+        if (from > 1) { x.p = 1; wp_href(h, sizeof h, &x); n = gapp(n, "<a href=\""); n = gapp(n, h); n = gapp(n, "\">1</a> ... "); }
+        for (int i = from; i <= to; i++) {
+            if (i == w.p) { n = gapp(n, "[<b>"); n = napp(n, i); n = gapp(n, "</b>] "); continue; }
+            x.p = i; wp_href(h, sizeof h, &x); n = gapp(n, "<a href=\""); n = gapp(n, h); n = gapp(n, "\">"); n = napp(n, i); n = gapp(n, "</a> ");
         }
+        if (to < last) { n = gapp(n, "... "); x.p = (int)last; wp_href(h, sizeof h, &x); n = gapp(n, "<a href=\""); n = gapp(n, h); n = gapp(n, "\">"); n = napp(n, last); n = gapp(n, "</a> "); }
+        if (w.p < last) { x.p = w.p + 1; wp_href(h, sizeof h, &x); n = gapp(n, "<a href=\""); n = gapp(n, h); n = gapp(n, "\">Next</a>"); }
     }
     n = gapp(n, "</p>");
     show_html(gen, n, u, 0);
@@ -632,7 +707,7 @@ static u32 mix(u32 a, u32 b, i32 t)                     /* t: 0..255 */
 static void img_reset(void)
 {
     ipool_n = 0; iq_cur = -1; iq_next = 0;
-    for (int i = 0; i < 16; i++) { idec[i].w = idec[i].h = 0; idec[i].a = 0; }
+    for (int i = 0; i < 32; i++) { idec[i].w = idec[i].h = 0; idec[i].a = 0; }
 }
 
 /* Качает картинки по одной после загрузки страницы; возвращает 1, если что-то изменилось. */
@@ -1052,7 +1127,7 @@ int browser_tick(u32 ticks)
     if (!loading && prog >= 1000) prog_a = anim_approach(prog_a, 0, dt);
     if (!loading && prog_a == 0) { prog = 0; prog_t = 0; }
     if (fade > 0) fade = anim_approach(fade, 0, dt);
-    for (int i = 0; i < 16; i++) if (idec[i].w > 0 && idec[i].a < 1024) { idec[i].a = anim_approach(idec[i].a, 1024, dt); dirty = 1; }
+    for (int i = 0; i < 32; i++) if (idec[i].w > 0 && idec[i].a < 1024) { idec[i].a = anim_approach(idec[i].a, 1024, dt); dirty = 1; }
     if (sc != sc_t) {
         i32 d = sc_t - sc, step = d * 30 / 100;
         for (u32 k = 1; k < dt; k++) step += (d - step) * 20 / 100;
