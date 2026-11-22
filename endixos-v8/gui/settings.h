@@ -29,6 +29,6 @@ void settings_show_page(int p);     /* 0 Wallpaper, 1 Appearance, 2 Liquid Glass
 
 
 #define ENDIX_VERSION "8.3"
-#define ENDIX_BUILD 54
+#define ENDIX_BUILD 55
 
 #endif

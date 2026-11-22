@@ -416,3 +416,9 @@ Terminal `update usb` installs endixos.elf from a FAT32 USB stick (/, /boot or /
 
 ## Build 54: screenshots to clipboard
 Ctrl+3 (anywhere) or terminal `screenshot` copies the screen to the system clipboard (gui/clipboard.c, RAM only, nothing is written to disk). The image is downscaled to max 440x280. Ctrl+V in Notes inserts it as a picture: text holds `\x01`+slot digit followed by blank lines that reserve the space (6 slots in RAM; markers are stripped on load, so pictures live only until reboot; Notes widget skips them). Backspace/Delete remove a picture as a unit. Not yet: copy text, paste elsewhere. Host-tested with screenshots (tools/tests style harness); not run on hardware.
+
+## Build 55: Browix start page + Wallpapers site
+- `endix://home` is now a native start page: search pill (click = address bar), 8 Favorites tiles with hover.
+- `endix://wallpapers[?s=toplist|date_added|random|views&q=word&p=N]`: a built-in port of wallhaven.cc. The browser calls the public Wallhaven API v1 (SFW only, resolutions 1024x768..1920x1080 so files stay small), builds a page of 12 thumbnails (flowing images, categories row, Previous/Next). Address bar shortcut: `wh cats`.
+- Click a picture -> `endix://dl?id=..&u=https://w.wallhaven.cc/..` downloads the full file (8 MB buffer, progress toast), decodes/downscales to max 1280x720, saves it as uncompressed PNG `/Pictures/WH<ID>.PNG` (Photos limit 3 MB) and notifies. Pick it in Settings > Photos. Baseline JPEG/PNG only.
+- Test: host mock of net_fetch + real JPEGs (screenshots checked, saved PNG opens in PIL). The real Wallhaven reply format, Cloudflare/TLS acceptance and speed on the netbook are NOT verified (no network here).

@@ -1,5 +1,5 @@
-build=54
+build=55
 version=8.3
-size=3877168
-notes=Screenshots: Ctrl+3 copies the screen, Ctrl+V pastes it into Notes|update usb command|New widgets and widget editor
-sha256=3c970277794ced056dd2ad9c62814898619e3e411540e6a65b493afbfa020d03
+size=3889944
+notes=Browix: new start page with Favorites|Wallpapers: wallhaven.cc built into the browser, click to save into Pictures (type 'wh cats')|Screenshots to clipboard, update usb
+sha256=2ec8d529012b8b058f63922007908df70b87a11b1386a8ced77b02a0d6ae9236

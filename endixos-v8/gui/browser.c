@@ -9,6 +9,8 @@
 #include "ui.h"
 #include "anim.h"
 #include "img.h"
+#include "photos.h"
+#include "../kernel/blk.h"
 #include "../kernel/net.h"
 #include "../kernel/event.h"
 
@@ -46,6 +48,17 @@ static char errhtml[1400];
 static int restore_sc;
 static i32 pending_sc;
 static u32 page_len; static int page_plain, src_view;      /* исходник последней загруженной страницы (для Ctrl+U) */
+
+static int home_mode, home_hover = -1;                  /* нативная стартовая страница */
+static int gen_wp;                                      /* загружается ответ API обоев: из JSON строим страницу */
+static char gen[16384];
+#define DL_BUF (8u << 20)
+static u8 dlbuf[DL_BUF];
+static u32 dlpix[1280 * 720];
+static u8 pngbuf[1280 * 720 * 3 + 720 + (1280 * 720 * 3 / 65535 + 3) * 5 + 128];
+static int dl_active; static char dl_id[16]; static u32 dl_t0;
+static char toast[96]; static u32 toast_t; static i32 toast_a;
+__attribute__((weak)) void wm_notify(const char *title, const char *text) { (void)title; (void)text; }
 
 /* ---------- встроенные страницы ---------- */
 
@@ -98,6 +111,238 @@ static u32 eapp(u32 n, const char *s, int escape)
     }
     errhtml[n] = 0;
     return n;
+}
+
+static void show_html(const char *src, u32 len, const char *base, int plain);
+static void set_toast(const char *t) { scpy(toast, t, sizeof toast); toast_t = now; toast_a = 1024; }
+
+#define NTILE 8
+static const struct { const char *name, *url; u32 col; char glyph; } tiles[NTILE] = {
+    { "Wallpapers", "endix://wallpapers", 0xFF9500, 'p' }, { "Random", "endix://wallpapers?s=random", 0xAF52DE, '?' },
+    { "Wikipedia", "https://en.wikipedia.org/wiki/Main_Page", 0x636366, 'W' }, { "DuckDuckGo", "https://lite.duckduckgo.com/lite/", 0xFF5E3A, 'D' },
+    { "Hacker News", "https://news.ycombinator.com/", 0xFF6600, 'Y' }, { "example.com", "http://example.com/", 0x0A84FF, 'E' },
+    { "First website", "http://info.cern.ch/", 0x30B0C7, 'C' }, { "About Browix", "endix://about", 0x34C759, 'i' } };
+#define TILE_W 120
+#define TILE_H 118
+
+static void home_geom(i32 *gx, i32 *gy, i32 *cols, i32 *sx, i32 *sy, i32 *sw)
+{
+    i32 c = (vw - 40) / TILE_W; if (c > 4) c = 4; if (c < 1) c = 1;
+    *cols = c; *gx = (vw - c * TILE_W) / 2; *gy = 168;
+    *sw = vw - 60 < 520 ? vw - 60 : 520; *sx = (vw - *sw) / 2; *sy = 56;
+}
+static int home_tile_at(i32 rx, i32 ry)
+{
+    i32 gx, gy, c, sx, sy, sw; home_geom(&gx, &gy, &c, &sx, &sy, &sw);
+    ry -= TB;
+    if (rx < gx || ry < gy) return -1;
+    i32 col = (rx - gx) / TILE_W, row = (ry - gy) / TILE_H;
+    if (col >= c) return -1;
+    int i = (int)(row * c + col);
+    return i < NTILE ? i : -1;
+}
+static void tile_icon(i32 x, i32 y, i32 s, int i, u32 col)
+{
+    fb_fill_round_rect(x, y, s, s, s / 4, col, 255);
+    u32 wh = RGB(255, 255, 255);
+    if (tiles[i].glyph == 'p') {                                   /* картинка: солнце и горы */
+        fb_fill_circle(x + s * 68 / 100, y + s * 32 / 100, s / 9, wh);
+        for (i32 k = 0; k < s * 28 / 100; k++) { fb_fill_rect(x + s * 14 / 100 + (s * 28 / 100 - k) * 6 / 5 - 2 * 0, y + s * 50 / 100 + k, 2 * k * 6 / 5 + 2, 1, wh); }
+        for (i32 k = 0; k < s * 20 / 100; k++) fb_fill_rect(x + s * 48 / 100 + (s * 20 / 100 - k), y + s * 58 / 100 + k, 2 * k + 2, 1, RGB(255, 230, 190));
+    } else {
+        char g[2] = { tiles[i].glyph, 0 };
+        i32 w = font_width(g, FONT_TITLE);
+        font_draw(x + (s - w) / 2, y + s / 2 - 12, g, wh, FONT_TITLE);
+    }
+}
+static void home_draw(i32 x, i32 py)
+{
+    const theme_t *th = theme();
+    int dk = theme_is_dark();
+    i32 gx, gy, c, sx, sy, sw; home_geom(&gx, &gy, &c, &sx, &sy, &sw);
+    font_draw(x + (vw - font_width("Browix", FONT_TITLE)) / 2, py + 14, "Browix", th->text, FONT_TITLE);
+    fb_fill_round_rect(x + sx, py + sy, sw, 40, 12, dk ? RGB(58, 58, 64) : RGB(255, 255, 255), 255);
+    fb_fill_circle(x + sx + 22, py + sy + 18, 7, th->sub); fb_fill_circle(x + sx + 22, py + sy + 18, 5, dk ? RGB(58, 58, 64) : RGB(255, 255, 255));
+    for (i32 k = 0; k < 5; k++) fb_fill_rect(x + sx + 26 + k, py + sy + 22 + k, 2, 2, th->sub);
+    font_draw(x + sx + 40, py + sy + 11, "Search or enter website name", th->sub, FONT_REGULAR);
+    font_draw(x + gx + 4, py + gy - 34, "Favorites", th->text, FONT_BOLD);
+    for (int i = 0; i < NTILE; i++) {
+        i32 tx = x + gx + (i % c) * TILE_W, ty = py + gy + (i / c) * TILE_H;
+        if (i == home_hover) fb_fill_round_rect(tx + 2, ty - 4, TILE_W - 4, TILE_H - 4, 14, dk ? RGB(255, 255, 255) : RGB(0, 0, 0), 22);
+        tile_icon(tx + (TILE_W - 64) / 2, ty + 4, 64, i, tiles[i].col | 0);
+        i32 w = font_width(tiles[i].name, FONT_REGULAR);
+        font_draw(tx + (TILE_W - w) / 2, ty + 78, tiles[i].name, th->text, FONT_REGULAR);
+    }
+    i32 ny = py + gy + ((NTILE + c - 1) / c) * TILE_H + 8;
+    if (ny + 20 < py + vh) font_draw(x + gx + 4, ny, "Type wh cats in the address bar to search wallpapers.", th->sub, FONT_REGULAR);
+}
+
+/* ---------- обои: Wallhaven API -> страница ---------- */
+
+static u32 gapp(u32 n, const char *t) { while (*t && n + 1 < sizeof gen) gen[n++] = *t++; gen[n] = 0; return n; }
+static const char *jfind(const char *p, const char *end, const char *key)      /* значение строки после "key":" */
+{
+    u32 kl = slen(key);
+    for (; p + kl + 4 < end; p++) {
+        if (p[0] != '"') continue;
+        u32 i = 0; while (i < kl && p[1 + i] == key[i]) i++;
+        if (i == kl && p[1 + kl] == '"' && p[2 + kl] == ':' && p[3 + kl] == '"') return p + 4 + kl;
+    }
+    return 0;
+}
+static u32 jstr(const char *p, char *out, u32 cap)                            /* до закрывающей кавычки, \/ -> / */
+{
+    u32 o = 0;
+    while (*p && *p != '"' && o + 1 < cap) { if (*p == '\\' && p[1]) p++; out[o++] = *p++; }
+    out[o] = 0; return o;
+}
+static int url_param(const char *u, const char *key, char *out, u32 cap)
+{
+    out[0] = 0;
+    const char *q = u; while (*q && *q != '?') q++;
+    if (!*q) return 0;
+    u32 kl = slen(key);
+    for (q++; *q; ) {
+        if (starts(q, key) && q[kl] == '=') { u32 o = 0; q += kl + 1; while (*q && *q != '&' && o + 1 < cap) out[o++] = *q++; out[o] = 0; return 1; }
+        while (*q && *q != '&') q++;
+        if (*q == '&') q++;
+    }
+    return 0;
+}
+static int is_safe_q(const char *q) { for (; *q; q++) if (!((*q >= 'a' && *q <= 'z') || (*q >= 'A' && *q <= 'Z') || (*q >= '0' && *q <= '9') || *q == '+' || *q == '-' || *q == '_' || *q == '.' || *q == '%')) return 0; return 1; }
+
+static void wp_api_url(const char *u, char *out, u32 cap)
+{
+    char q[64], sv[16], pg[8];
+    url_param(u, "q", q, sizeof q); url_param(u, "s", sv, sizeof sv); url_param(u, "p", pg, sizeof pg);
+    if (!is_safe_q(q)) q[0] = 0;
+    if (!(seq(sv, "toplist") || seq(sv, "random") || seq(sv, "date_added") || seq(sv, "views") || seq(sv, "favorites"))) scpy(sv, "toplist", sizeof sv);
+    if (!pg[0] || pg[0] < '1' || pg[0] > '9' || slen(pg) > 3) scpy(pg, "1", sizeof pg);
+    scpy(out, "https://wallhaven.cc/api/v1/search?categories=111&purity=100&resolutions=1920x1080,1366x768,1280x720,1280x800,1600x900,1024x768&sorting=", cap);
+    u32 l = slen(out); scpy(out + l, sv, cap - l); l = slen(out);
+    scpy(out + l, "&page=", cap - l); l = slen(out); scpy(out + l, pg, cap - l); l = slen(out);
+    if (q[0]) { scpy(out + l, "&q=", cap - l); l = slen(out); scpy(out + l, q, cap - l); }
+}
+
+static void wp_page_html(const char *json, u32 len, const char *u)
+{
+    char q[64], sv[16], pg[8], t[300], id[16], res[20], path[160], th[160];
+    url_param(u, "q", q, sizeof q); url_param(u, "s", sv, sizeof sv); url_param(u, "p", pg, sizeof pg);
+    int page = pg[0] >= '1' && pg[0] <= '9' ? (int)(pg[0] - '0') + (pg[1] ? 10 * (pg[0] - '0') + (pg[1] - '0') - (pg[0] - '0') : 0) : 1;
+    if (pg[0] && pg[1]) page = (pg[0] - '0') * 10 + (pg[1] - '0');
+    if (pg[0] && pg[1] && pg[2]) page = page * 10 + (pg[2] - '0');
+    u32 n = gapp(0, "<title>Wallpapers</title><h1>Wallpapers</h1><p>From wallhaven.cc. Click a picture to save it to Pictures (then pick it in Settings > Desktop & Dock > Photos). Search: type <b>wh</b> and a word in the address bar.</p><p>");
+    static const char *const cats[][2] = { { "Top", "s=toplist" }, { "Latest", "s=date_added" }, { "Random", "s=random" }, { "Most viewed", "s=views" },
+        { "Nature", "q=nature" }, { "Space", "q=space" }, { "Cars", "q=cars" }, { "Anime", "q=anime" }, { "City", "q=city" }, { "Minimal", "q=minimal" }, { "Abstract", "q=abstract" }, { "Dark", "q=dark" } };
+    for (int i = 0; i < 12; i++) { n = gapp(n, "<a href=\"endix://wallpapers?"); n = gapp(n, cats[i][1]); n = gapp(n, "\">"); n = gapp(n, cats[i][0]); n = gapp(n, "</a> "); }
+    n = gapp(n, "</p><p>");
+    const char *end = json + len, *p = json; int shown = 0;
+    const char *meta = jfind(json, end, "last_page");
+    (void)meta;
+    while (shown < 12 && (p = jfind(p, end, "id")) != 0) {
+        jstr(p, id, sizeof id);
+        const char *nx = jfind(p, end, "id"); const char *lim = nx ? nx : end;
+        const char *r = jfind(p, lim, "resolution"), *pa = jfind(p, lim, "path"), *sm = jfind(p, lim, "small");
+        p = lim;
+        if (!pa || !sm || !id[0]) continue;
+        jstr(pa, path, sizeof path); jstr(sm, th, sizeof th);
+        if (r) jstr(r, res, sizeof res); else res[0] = 0;
+        for (u32 k = 0; id[k]; k++) if (!((id[k] >= 'a' && id[k] <= 'z') || (id[k] >= '0' && id[k] <= '9'))) id[0] = 0;
+        if (!id[0] || !starts(path, "https://") || !starts(th, "https://")) continue;
+        n = gapp(n, "<a href=\"endix://dl?id="); n = gapp(n, id); n = gapp(n, "&u="); n = gapp(n, path); n = gapp(n, "\"><img src=\""); n = gapp(n, th);
+        n = gapp(n, "\" width=\"220\" alt=\""); n = gapp(n, res); n = gapp(n, "\"></a> ");
+        shown++;
+    }
+    if (!shown) n = gapp(n, "Nothing found. Try another word or category.");
+    n = gapp(n, "</p><p>");
+    t[0] = 0;
+    {   char np[8]; u32 l = 0; int pv = page > 1 ? page - 1 : 0, nxp = page + 1;
+        for (int k = 0; k < 2; k++) {
+            int v = k ? nxp : pv; if (!v) continue;
+            l = 0; if (v >= 100) np[l++] = (char)('0' + v / 100 % 10); if (v >= 10) np[l++] = (char)('0' + v / 10 % 10); np[l++] = (char)('0' + v % 10); np[l] = 0;
+            n = gapp(n, "<a href=\"endix://wallpapers?p="); n = gapp(n, np);
+            if (sv[0]) { n = gapp(n, "&s="); n = gapp(n, sv); }
+            if (q[0]) { n = gapp(n, "&q="); n = gapp(n, q); }
+            n = gapp(n, k ? "\">Next page</a> " : "\">Previous page</a> ");
+        }
+    }
+    n = gapp(n, "</p>");
+    show_html(gen, n, u, 0);
+}
+
+static u8 *be32(u8 *p, u32 v) { p[0] = (u8)(v >> 24); p[1] = (u8)(v >> 16); p[2] = (u8)(v >> 8); p[3] = (u8)v; return p + 4; }
+static u32 crc_t[256]; static int crc_ok;
+static u32 crc_upd(u32 c, const u8 *d, u32 n)
+{
+    if (!crc_ok) { for (u32 i = 0; i < 256; i++) { u32 x = i; for (int k = 0; k < 8; k++) x = x & 1 ? 0xEDB88320u ^ (x >> 1) : x >> 1; crc_t[i] = x; } crc_ok = 1; }
+    for (u32 i = 0; i < n; i++) c = crc_t[(c ^ d[i]) & 255] ^ (c >> 8);
+    return c;
+}
+static u8 *png_chunk_end(u8 *start, u8 *p) { be32(start, (u32)(p - start - 8)); return be32(p, ~crc_upd(0xFFFFFFFFu, start + 4, (u32)(p - start - 4))); }
+
+/* PNG без сжатия (deflate stored): просто и достаточно для обоев. Возвращает размер файла. */
+static u32 png_encode(const u32 *px, i32 w, i32 h)
+{
+    u8 *p = pngbuf; static const u8 sig[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
+    for (int i = 0; i < 8; i++) *p++ = sig[i];
+    u8 *c = p; p += 4; *p++ = 'I'; *p++ = 'H'; *p++ = 'D'; *p++ = 'R';
+    p = be32(p, (u32)w); p = be32(p, (u32)h); *p++ = 8; *p++ = 2; *p++ = 0; *p++ = 0; *p++ = 0;
+    p = png_chunk_end(c, p);
+    u32 raw = (u32)h * (3 * (u32)w + 1), left = raw, a = 1, b = 0, row = 0, col = 0; int ph = 0;
+    c = p; p += 4; *p++ = 'I'; *p++ = 'D'; *p++ = 'A'; *p++ = 'T'; *p++ = 0x78; *p++ = 0x01;
+    while (left) {
+        u32 n = left > 65535 ? 65535 : left;
+        *p++ = n == left; *p++ = (u8)n; *p++ = (u8)(n >> 8); *p++ = (u8)~n; *p++ = (u8)(~n >> 8);
+        for (u32 i = 0; i < n; i++) {
+            u8 v;
+            if (ph == 0) { v = 0; ph = 1; col = 0; }
+            else { u32 q = px[row * (u32)w + col / 3], ch = col % 3; v = ch == 0 ? (u8)(q >> 16) : ch == 1 ? (u8)(q >> 8) : (u8)q; if (++col == 3 * (u32)w) { ph = 0; row++; } }
+            *p++ = v; a += v; if (a >= 65521) a -= 65521; b += a; if (b >= 65521) b -= 65521;
+        }
+        left -= n;
+    }
+    p = be32(p, (b << 16) | a);
+    p = png_chunk_end(c, p);
+    c = p; p += 4; *p++ = 'I'; *p++ = 'E'; *p++ = 'N'; *p++ = 'D';
+    p = png_chunk_end(c, p);
+    return (u32)(p - pngbuf);
+}
+
+static void dl_finish(u32 len)
+{
+    int w = 0, h = 0;
+    if (!img_info(dlbuf, len, &w, &h) || w < 16 || h < 16) { set_toast("This file is not a supported picture (baseline JPEG or PNG)."); return; }
+    int tw = w, th = h;
+    if (tw > 1280) { th = th * 1280 / tw; tw = 1280; }
+    if (th > 720) { tw = tw * 720 / th; th = 720; }
+    if (tw < 1) tw = 1;
+    if (th < 1) th = 1;
+    if (!img_decode_ex(dlbuf, len, tw, th, dlpix, 4u * 1000 * 1000)) { set_toast("Could not decode this picture."); return; }
+    u32 sz = png_encode(dlpix, tw, th);
+    static fat_t f;
+    if (!photos_volume(&f)) { set_toast("No disk to save to (install EndixOS first)."); return; }
+    fat_mkdir(&f, "/Pictures");
+    char path[40] = "/Pictures/WH"; u32 l = 12;
+    for (u32 i = 0; dl_id[i] && l < 20; i++) path[l++] = (char)(dl_id[i] >= 'a' && dl_id[i] <= 'z' ? dl_id[i] - 32 : dl_id[i]);
+    path[l++] = '.'; path[l++] = 'P'; path[l++] = 'N'; path[l++] = 'G'; path[l] = 0;
+    if (fat_write(&f, path, pngbuf, sz) != 0) { set_toast("Could not write to the disk."); return; }
+    char m[96] = "Saved to Pictures: "; scpy(m + 19, path + 10, sizeof m - 19);
+    set_toast(m); wm_notify("Wallpapers", m);
+}
+
+static void start_dl(const char *u)
+{
+    char id[16], pu[200];
+    url_param(u, "id", id, sizeof id);
+    const char *q = u; while (*q && !(q[0] == '&' && q[1] == 'u' && q[2] == '=')) q++;
+    if (!*q) return;
+    scpy(pu, q + 3, sizeof pu);
+    if (!starts(pu, "https://") || !id[0]) return;
+    if (dl_active) { set_toast("Already downloading..."); return; }
+    if (loading || iq_cur >= 0 || iq_next < html_image_count()) { set_toast("Wait until the thumbnails finish loading."); return; }
+    scpy(dl_id, id, sizeof dl_id);
+    if (net_fetch(pu, dlbuf, DL_BUF) < 0) { net_fetch_t f; net_fetch_info(&f); set_toast(f.err[0] ? f.err : "Download failed."); return; }
+    dl_active = 1; dl_t0 = now; set_toast("Downloading...");
 }
 
 static void show_html(const char *src, u32 len, const char *base, int plain)
@@ -154,6 +399,15 @@ static void normalize(const char *in, char *out, u32 cap)
 {
     while (*in == ' ') in++;
     if (starts(in, "http://") || starts(in, "https://") || starts(in, "endix://")) { scpy(out, in, cap); return; }
+    if ((in[0] == 'w' && in[1] == 'h' && in[2] == ' ') || starts(in, "wallhaven ")) {          /* wh кошки -> обои */
+        while (*in && *in != ' ') in++;
+        while (*in == ' ') in++;
+        scpy(out, "endix://wallpapers?q=", cap);
+        u32 l = slen(out);
+        for (; *in && l + 4 < cap && l < 20 + 60; in++) { u8 c = (u8)*in; out[l++] = c == ' ' ? '+' : ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') ? (char)c : '-'; }
+        out[l] = 0;
+        return;
+    }
     if (looks_like_host(in)) {
         scpy(out, "http://", cap);
         u32 l = slen(out);
@@ -181,7 +435,20 @@ static void start_load(const char *u, i32 scroll_to)
     scpy(url, u, sizeof(url));
     pending_sc = scroll_to;
     restore_sc = scroll_to > 0;
-    if (seq(u, "endix://home") || seq(u, "endix://")) { show_html(HOME_HTML, sizeof(HOME_HTML) - 1, "endix://home", 0); prog = 0; prog_a = 0; return; }
+    home_mode = 0; gen_wp = 0;
+    if (seq(u, "endix://home") || seq(u, "endix://")) {
+        show_html("<title>Start Page</title>", 25, "endix://home", 0); home_mode = 1; home_hover = -1;
+        page_bg_c = theme_is_dark() ? RGB(30, 30, 34) : RGB(245, 245, 247); page_dark = theme_is_dark();
+        prog = 0; prog_a = 0; return;
+    }
+    if (starts(u, "endix://wallpapers")) {
+        char api[400]; wp_api_url(u, api, sizeof api);
+        scpy(loading_url, u, sizeof(loading_url));
+        if (net_fetch(api, pagebuf, PAGE_BUF) < 0) { net_fetch_t f; net_fetch_info(&f); show_error("Can't open the page", f.err[0] ? f.err : "Unknown error.", u); prog_a = 0; return; }
+        page_len = 0; src_view = 0; gen_wp = 1;
+        loading = 1; load_t0 = now; prog = 0; prog_t = 220; prog_a = 1024;
+        return;
+    }
     if (seq(u, "endix://about")) { show_html(ABOUT_HTML, sizeof(ABOUT_HTML) - 1, "endix://about", 0); prog = 0; prog_a = 0; return; }
     if (starts(u, "endix://")) { show_error("Page not found", "There is no such built-in page.", 0); return; }
     scpy(loading_url, u, sizeof(loading_url));
@@ -322,13 +589,21 @@ static void finish_load(void)
         }
         return;
     }
-    scpy(url, f.url, sizeof url);                       /* адрес после перенаправлений */
-    if (hist_n > 0) scpy(hist[hist_pos], url, sizeof hist[0]);
-    if (f.ctype == 2) { show_error("Can't display this file", "This is not a web page or text file (an image or another kind of file).", 0); return; }
-    if (f.status >= 400 && f.len < 30) {
+    if (!gen_wp) scpy(url, f.url, sizeof url);          /* адрес после перенаправлений */
+    if (hist_n > 0 && !gen_wp) scpy(hist[hist_pos], url, sizeof hist[0]);
+    if (!gen_wp && f.ctype == 2) { show_error("Can't display this file", "This is not a web page or text file (an image or another kind of file).", 0); return; }
+    if (!gen_wp && f.status >= 400 && f.len < 30) {
         char m[40] = "The server answered with error ";
         u32 l = slen(m), v = (u32)f.status; m[l++] = (char)('0' + v / 100 % 10); m[l++] = (char)('0' + v / 10 % 10); m[l++] = (char)('0' + v % 10); m[l] = 0;
         show_error("The page is not available", m, url);
+        return;
+    }
+    if (gen_wp) {
+        gen_wp = 0; page_len = 0; src_view = 0;
+        scpy(url, loading_url, sizeof url);
+        if (f.status != 200 || f.truncated) { show_error("Wallpapers are not available", "The wallpaper service did not answer correctly (HTTP error or too long a reply).", loading_url); return; }
+        pagebuf[f.len < PAGE_BUF ? f.len : PAGE_BUF - 1] = 0;
+        wp_page_html((const char *)pagebuf, f.len, loading_url);
         return;
     }
     page_len = f.len; page_plain = f.ctype == 1; src_view = 0;
@@ -453,7 +728,8 @@ void browser_draw(i32 x, i32 y, int focused)
 
     /* страница */
     fb_fill_rect(x, py, vw, vh, PAGE_BG);
-    if (have_page) {
+    if (home_mode) home_draw(x, py);
+    else if (have_page) {
         font_set_clip(py, pb);
         i32 top = sc, n = html_box_count();
         for (int pass = 0; pass < 2; pass++) {
@@ -506,6 +782,15 @@ void browser_draw(i32 x, i32 y, int focused)
         fb_fill_round_rect(sx, sy, w + 20, 24, 12, RGB(248, 248, 250), (u32)(st_a * 235 / 1024));
         font_set_clip(sy, sy + 24);
         font_draw(sx + 10, sy + 4, status_txt, mix(RGB(255, 255, 255), RGB(40, 40, 44), (st_a * 255) / 1024), FONT_REGULAR);
+        font_clear_clip();
+    }
+
+    if (toast_a > 0 && toast[0]) {                                  /* плашка: скачивание и результат */
+        i32 w = font_width(toast, FONT_BOLD) + 32; if (w > vw - 20) w = vw - 20;
+        i32 sx = x + (vw - w) / 2, sy = pb - 52;
+        fb_fill_round_rect(sx, sy, w, 36, 18, RGB(40, 40, 44), (u32)(toast_a * 225 / 1024));
+        font_set_clip(sy, sy + 36);
+        font_draw(sx + 16, sy + 9, toast, RGB(255, 255, 255), FONT_BOLD);
         font_clear_clip();
     }
 
@@ -618,9 +903,17 @@ int browser_click(i32 rx, i32 ry, u32 ticks)
         sb_drag = 1;
         return 1;
     }
+    if (home_mode) {
+        i32 gx, gy, c, sx, sy, sw; home_geom(&gx, &gy, &c, &sx, &sy, &sw);
+        if (rx >= sx && rx < sx + sw && ry - TB >= sy && ry - TB < sy + 40) { begin_edit(); ed[0] = 0; ed_n = ed_pos = 0; sel_all = 0; return 1; }
+        int t = home_tile_at(rx, ry);
+        if (t >= 0) { navigate(tiles[t].url); return 1; }
+        return was;
+    }
     int l = html_link_at(rx, ry - TB + sc);
     if (l >= 0) {
         const char *u = html_link_url(l);
+        if (u && starts(u, "endix://dl?")) { start_dl(u); return 1; }
         if (u) { char tmp[URLMAX + 6]; scpy(tmp, u, sizeof tmp); unwrap_ddg(tmp); navigate(tmp); return 1; }
     }
     return was;
@@ -647,10 +940,11 @@ int browser_mouse(i32 rx, i32 ry, int btn, int over)
             else if (rx >= 76 && rx < 104) nt[2] = 1024;
         }
         if (ry >= 8 && ry < 38 && rx >= 114) nt[3] = 1024;
-        if (ry >= TB && !in_scrollbar(rx, ry)) nl = html_link_at(rx, ry - TB + sc);
+        if (ry >= TB && !in_scrollbar(rx, ry)) nl = home_mode ? -1 : html_link_at(rx, ry - TB + sc);
         if (in_scrollbar(rx, ry)) sb_a_t = 1024, last_scroll_t = now;
     }
     for (int i = 0; i < 4; i++) hv_t[i] = nt[i];
+    if (home_mode) { int ht = over && ry >= TB ? home_tile_at(rx, ry) : -1; if (ht != home_hover) { home_hover = ht; dirty = 1; } }
     if (nl != link_hover) {
         link_hover = nl;
         if (nl >= 0) { const char *u = html_link_url(nl); scpy(status_txt, u ? u : "", sizeof status_txt); }
@@ -728,7 +1022,26 @@ int browser_tick(u32 ticks)
             dirty = 1;
         } else { finish_load(); dirty = 1; }
     }
-    if (have_page && !loading && img_pump()) dirty = 1;
+    if (dl_active) {
+        net_fetch_t f; net_fetch_info(&f);
+        if (f.state == NF_LOADING) {
+            char m[48] = "Downloading... "; u32 l = slen(m), kb = f.len / 1024;
+            if (kb >= 1024) { l = slen(m); m[l++] = (char)('0' + kb / 1024 % 10); m[l++] = '.'; m[l++] = (char)('0' + kb % 1024 * 10 / 1024); m[l++] = ' '; m[l++] = 'M'; m[l++] = 'B'; }
+            else { if (kb >= 100) m[l++] = (char)('0' + kb / 100 % 10); if (kb >= 10) m[l++] = (char)('0' + kb / 10 % 10); m[l++] = (char)('0' + kb % 10); m[l++] = ' '; m[l++] = 'K'; m[l++] = 'B'; }
+            m[l] = 0; scpy(toast, m, sizeof toast); toast_t = ticks; toast_a = 1024;
+            if (ticks - dl_t0 > 12000) { net_fetch_abort(); dl_active = 0; set_toast("The download stalled."); }
+        } else {
+            dl_active = 0;
+            if (f.state == NF_DONE && f.status == 200 && !f.truncated && f.len > 8) dl_finish(f.len);
+            else set_toast(f.state == NF_ERROR && f.err[0] ? f.err : f.truncated ? "The picture is too large to download." : "The server refused the download.");
+        }
+        dirty = 1;
+    }
+    if (have_page && !loading && !dl_active && img_pump()) dirty = 1;
+    if (toast[0] && !dl_active && ticks - toast_t > 400) {
+        toast_a = anim_approach(toast_a, 0, 8); dirty = 1;
+        if (toast_a <= 0) { toast_a = 0; toast[0] = 0; }
+    }
     u32 dt = ticks - last_anim;
     if (dt == 0) return dirty;
     if (dt > 8) dt = 8;
