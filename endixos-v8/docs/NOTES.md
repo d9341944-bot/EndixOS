@@ -428,3 +428,6 @@ Ctrl+3 (anywhere) or terminal `screenshot` copies the screen to the system clipb
 
 ## Build 57: wallpapers preview, save, set
 Click a Wallpapers thumbnail: the full file is downloaded and a preview card opens (decoded picture, "Wallhaven ID - WxH", buttons Set as Wallpaper / Save to Pictures / Cancel; Enter = set, Esc = cancel). Nothing is written until a button is pressed. Set = save `/Pictures/WH<ID>.PNG`, rescan photos, select it as desktop wallpaper (prefs keep it). PHOTO_MAX is now 16 (Settings > Photos grid); when more files exist the OLDEST drop out of the list, so photo indices can shift. Host-tested with mocks; disk write and wallpaper apply not run on hardware.
+
+## Build 58: Doom full screen
+F11 (inside the game), the green traffic-light button, double-click on the title or Window > Enter Full Screen puts Doom on the whole screen: no menu bar, Dock or cursor, mouse captured automatically (F12 toggles capture, F11 leaves). Scaling is gui/fb.c `fb_blit_scaled` (nearest, row copy for repeated source rows): integer 3x on 1024x600 (960x600), otherwise fit with black bars. wm_render short-circuits to `doomapp_draw_full()`; wm ignores mouse events while full screen; leaving the window or ending the game drops full screen. Scaler checked on host (test pattern); full screen path in the real game is not run (no WAD here, no hardware).

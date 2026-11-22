@@ -25,6 +25,8 @@ void fb_fill_circle(i32 cx, i32 cy, i32 r, u32 color);
 /* Прямой доступ к теневому буферу (шаг строки = fb_width()) и копирование готовых пикселей. */
 u32 *fb_buffer(void);
 void fb_blit(i32 x, i32 y, const u32 *src, i32 w, i32 h);
+/* Масштабирует src (sw x sh) в прямоугольник dw x dh с ближайшим соседом; прямоугольник обязан лежать на экране (Doom на весь экран). */
+void fb_blit_scaled(const u32 *src, i32 sw, i32 sh, i32 dx, i32 dy, i32 dw, i32 dh);
 
 /* Кэш статичных обоев: один раз рисуем, потом каждый кадр копируем одним махом. */
 void fb_save_background(void);

@@ -1,5 +1,5 @@
-build=57
+build=58
 version=8.3
-size=3906968
-notes=Wallpapers: preview, Set as Wallpaper and Save to Pictures buttons|Full Wallhaven-style catalog|Browix start page, screenshots, update usb
-sha256=97f1ba3ff24673f607004e58026e81b7012ce026bc6d38065a7953e8804d59c1
+size=3907168
+notes=Doom: full screen (F11 or green button), 3x scaling on 1024x600|Wallpapers: preview, set as wallpaper|Browix start page, catalog, screenshots, update usb
+sha256=dec4c662f5860378c394d0122b9b2c90e2c6eab391ab0a41db0621b342c38e67

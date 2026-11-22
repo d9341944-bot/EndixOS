@@ -530,3 +530,21 @@ void fb_shadow(i32 x, i32 y, i32 w, i32 h, i32 dy, i32 spread, u32 amax)
         }
     }
 }
+
+void fb_blit_scaled(const u32 *src, i32 sw, i32 sh, i32 dx, i32 dy, i32 dw, i32 dh)
+{
+    static u16 xmap[FB_MAX_W];
+    i32 W = (i32)fb_width(), H = (i32)fb_height();
+    if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0 || dw > FB_MAX_W || dx < 0 || dx + dw > W) return;
+    for (i32 x = 0; x < dw; x++) xmap[x] = (u16)(x * sw / dw);
+    u32 *fbp = fb_buffer(), *prev = 0; i32 prev_sy = -1;
+    for (i32 y = 0; y < dh; y++) {
+        i32 yy = dy + y;
+        if (yy < 0 || yy >= H) continue;
+        i32 sy = y * sh / dh;
+        u32 *o = fbp + (u32)yy * (u32)W + (u32)dx;
+        if (sy == prev_sy && prev) { for (i32 x = 0; x < dw; x++) o[x] = prev[x]; }      /* строка исходника та же: копируем готовую */
+        else { const u32 *sr = src + (u32)sy * (u32)sw; for (i32 x = 0; x < dw; x++) o[x] = sr[xmap[x]]; }
+        prev = o; prev_sy = sy;
+    }
+}

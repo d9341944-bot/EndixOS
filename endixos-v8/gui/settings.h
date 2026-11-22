@@ -30,6 +30,6 @@ void settings_show_page(int p);     /* 0 Wallpaper, 1 Appearance, 2 Liquid Glass
 
 
 #define ENDIX_VERSION "8.3"
-#define ENDIX_BUILD 57
+#define ENDIX_BUILD 58
 
 #endif

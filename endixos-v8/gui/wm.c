@@ -98,6 +98,9 @@ static const i32 app_h[WIN_COUNT] = { FILES_H + TITLE_H, 360, 520, 400, 520, BRO
 __attribute__((weak)) void doomapp_draw(i32 x, i32 y, i32 w, i32 h) { (void)x; (void)y; (void)w; (void)h; }
 __attribute__((weak)) int doomapp_tick(u32 t, int a) { (void)t; (void)a; return 0; }
 __attribute__((weak)) int doomapp_click(void) { return 0; }
+__attribute__((weak)) int doomapp_fullscreen(void) { return 0; }
+__attribute__((weak)) int doomapp_toggle_fs(void) { return 0; }
+__attribute__((weak)) void doomapp_draw_full(void) { }
 __attribute__((weak)) int doomapp_key(i32 k) { (void)k; return 0; }
 static void open_window(int app);
 void wm_open_file(int node);
@@ -1405,6 +1408,7 @@ static void max_finish(void)
 
 static void toggle_maximize(int app)
 {
+    if (app == APP_DOOM && doomapp_toggle_fs()) { scene_dirty = 1; return; }       /* Doom: настоящий полный экран, без меню и Dock */
     window_t *w = &wins[app];
     max_finish();
     i32 from[4] = { w->x, w->y, w->w, w->h };
@@ -3206,6 +3210,7 @@ __attribute__((weak)) void kbd_set_layout(int ru) { (void)ru; }
 void wm_handle_event(const event_t *e)
 {
     sync_sizes();
+    if (doomapp_fullscreen() && e->type == EV_MOUSE) return;           /* полный экран Doom: мышь только игре (F12) */
     if (e->type == EV_KEY && e->a == KEY_LAYOUT) { scene_dirty = 1; return; }      /* Alt+Shift: сменилась раскладка */
     if (e->type == EV_KEY && e->a == KEY_LOCK && !login_active() && !installer_active()) {      /* Win+L */
         lock_now();
@@ -3538,6 +3543,7 @@ void wm_render(void)
         cursor_moved = 0;
         return;
     }
+    if (doomapp_fullscreen()) { doomapp_draw_full(); scene_dirty = 0; cursor_moved = 0; return; }
     xf_check();
     if (mc_v > 0) {
         render_scene(2);
@@ -3587,12 +3593,13 @@ int wm_frame(u32 ticks)
         wm_render();
         if (cursor_moved) fb_frame_restore(drawn_x, drawn_y, drawn_w, drawn_h);     /* курсор сдвинулся: старый стираем (flip шлёт только изменённое); иначе он не мигает */
         fb_flip();
-        draw_cursor();
+        if (!doomapp_fullscreen()) draw_cursor();
         cursor_moved = 0;
         return 1;
     }
     if (cursor_moved) {                     /* курсор не ждёт сцену */
         cursor_moved = 0;
+        if (doomapp_fullscreen()) return 0;
         fb_frame_restore(drawn_x, drawn_y, drawn_w, drawn_h);
         draw_cursor();
         return 1;

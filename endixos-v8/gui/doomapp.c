@@ -102,11 +102,13 @@ static const void *find_wad(u32 *len)
 static void set(const char *s) { int i = 0; for (; s[i] && i < 95; i++) msg[i] = s[i]; msg[i] = 0; }
 
 static int cap;                                  /* мышь захвачена (F12) */
+static int fs, fs_fresh;                         /* игра на весь экран (F11) */
 static int mouse_cb(int dx, int dy, int btn) { doom_mouse(dx, dy, btn); return 1; }
 static void set_cap(int on) { cap = on; ps2_mouse_hook = on ? mouse_cb : 0; }
 static int raw(u8 sc, int ext, int press)
 {
     if (sc == 0x58 && !ext) { if (press) set_cap(!cap); return 1; }       /* F12: мышь вкл/выкл */
+    if (sc == 0x57 && !ext) { if (press) { fs = !fs; fs_fresh = 1; set_cap(fs); } return 1; }   /* F11: на весь экран */
     doom_input(sc, ext, press); return 1;
 }
 int doom_audio_start(const int16_t *ring, uint32_t frames) { return hda_present() && hda_play_loop(ring, frames); }
@@ -124,6 +126,21 @@ static void start(void)
 }
 
 void doomapp_init(void) { }
+int doomapp_fullscreen(void) { return fs && st == S_RUN; }
+static void set_cap(int on);
+int doomapp_toggle_fs(void) { if (st != S_RUN) return 0; fs = !fs; fs_fresh = 1; set_cap(fs); return 1; }
+void doomapp_draw_full(void)
+{
+    i32 W = (i32)fb_width(), H = (i32)fb_height();
+    if (fs_fresh) { fb_fill_rect(0, 0, W, H, 0); fs_fresh = 0; }
+    const u32 *s = doom_screen();
+    if (!s) return;
+    i32 dw = W, dh = W * 200 / 320;                                /* квадратные пиксели 8:5, вписываем в экран */
+    if (dh > H) { dh = H; dw = H * 320 / 200; }
+    i32 k = W / 320 < H / 200 ? W / 320 : H / 200;
+    if (k >= 1 && 320 * k * 100 >= dw * 88) { dw = 320 * k; dh = 200 * k; }    /* целый масштаб, если почти не теряем размер */
+    fb_blit_scaled(s, 320, 200, (W - dw) / 2, (H - dh) / 2, dw, dh);
+}
 int doomapp_click(void) { if (st == S_IDLE || st == S_ERR) { st = S_LOADING; return 1; } return 0; }
 int doomapp_key(i32 key) { if (key == '\n' || key == '\r' || key == ' ') return doomapp_click(); return 0; }
 
@@ -132,9 +149,9 @@ int doomapp_tick(u32 ticks, int active)
     (void)ticks;
     if (st == S_LOADING) { if (active) { start(); return 1; } return 0; }
     if (st != S_RUN) { if (was_active) { grab(0); was_active = 0; } return 0; }
-    if (!doom_alive()) { grab(0); doom_snd_stop(); st = S_DONE; was_active = 0; set("The game has ended. Restart EndixOS to play again."); return 1; }
+    if (!doom_alive()) { fs = 0; grab(0); doom_snd_stop(); st = S_DONE; was_active = 0; set("The game has ended. Restart EndixOS to play again."); return 1; }
     if (active != was_active) {
-        if (!active) { doom_release_all(); grab(0); doom_snd_stop(); } else { grab(1); doom_snd_resume(); }
+        if (!active) { fs = 0; doom_release_all(); grab(0); doom_snd_stop(); } else { grab(1); doom_snd_resume(); }
         was_active = active;
     }
     if (!active) return 0;
