@@ -1,5 +1,5 @@
-build=53
+build=54
 version=8.3
-size=3872728
-notes=update usb command: install from a USB stick without network|New widgets and widget editor
-sha256=5eea09b3d7029e7275c385a0a48cc6086df3ffa4b611f390e6e737925f402cbb
+size=3877000
+notes=Screenshots: Ctrl+3 or 'screenshot' saves PNG to Pictures|update usb command|New widgets and widget editor
+sha256=5bfc2fbf956b736af4bcaff7effe0933dfd86afc14ce13003f6761d378e847d0

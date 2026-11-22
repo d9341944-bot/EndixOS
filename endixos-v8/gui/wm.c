@@ -1,6 +1,7 @@
 /* Оконный менеджер EndixOS: menu bar, окна, Dock, курсор, встроенные приложения. */
 #include "wm.h"
 #include "update.h"
+#include "screenshot.h"
 #include "../drivers/pci.h"
 #include "../drivers/ahci.h"
 #include "../drivers/usb.h"
@@ -3348,6 +3349,12 @@ void wm_handle_event(const event_t *e)
         scene_dirty = 1;
         if (e->a == KEY_F3 || (e->a == KEY_UP && e->b)) {      /* F3 или Ctrl+Вверх */
             mc_toggle();
+            return;
+        }
+        if (e->a == '3' && e->b) {                         /* Ctrl+3: снимок экрана в /Pictures */
+            char nm[48];
+            if (screenshot_take(nm, sizeof nm) == 0) { char t[64] = "Saved as "; int i = 9; for (char *q = nm; *q && i < 62; q++) t[i++] = *q; t[i] = 0; notify("Screenshot", t); }
+            else notify("Screenshot", nm);
             return;
         }
         if (e->a == ' ' && e->b) {                         /* Ctrl+Пробел */
