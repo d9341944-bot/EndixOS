@@ -271,6 +271,8 @@ static void draw_card(i32 x, i32 y, int dark, int selected, const char *label)
               label, selected ? t->text : t->sub, FONT_REGULAR);
 }
 
+void settings_photos_changed(void) { for (int i = 0; i < PHOTO_MAX; i++) pthumb_ok[i] = 0; }
+
 static void draw_photos(i32 x, i32 y)
 {
     const theme_t *t = theme();
@@ -280,7 +282,7 @@ static void draw_photos(i32 x, i32 y)
         static const char *const hint[4] = {
             "No pictures found.",
             "Put JPEG or PNG files into the folder \"Pictures\" on the",
-            "system disk (the FAT32 partition), then restart EndixOS.",
+            "system disk, or save wallpapers from Browix (Wallpapers).",
             "JPEG must be baseline (not progressive), up to 4096 px wide." };
         for (int i = 0; i < 4; i++)
             font_draw(x + SIDEBAR_W + 25, y + 96 + i * 22, hint[i], i ? t->sub : t->text, FONT_REGULAR);

@@ -10,6 +10,7 @@
 #include "anim.h"
 #include "img.h"
 #include "photos.h"
+#include "wallpaper.h"
 #include "../kernel/blk.h"
 #include "../kernel/net.h"
 #include "../kernel/event.h"
@@ -295,7 +296,7 @@ static void wp_page_html(const char *json, u32 len, const char *u)
     char id[16], res[20], path[160], th[160], h[300];
     const char *end = json + len, *p = json;
     long total = jnum(json, end, "total"), last = jnum(json, end, "last_page");
-    u32 n = gapp(0, "<title>Wallpapers</title><h1>Wallpapers</h1><p>Wallhaven catalog (SFW). Search: type <b>wh</b> and a word in the address bar, e.g. <b>wh mountains</b>. Click a picture to save it into Pictures.</p><p>");
+    u32 n = gapp(0, "<title>Wallpapers</title><h1>Wallpapers</h1><p>Wallhaven catalog (SFW). Search: type <b>wh</b> and a word in the address bar, e.g. <b>wh mountains</b>. Click a picture to preview it, then set it as wallpaper or save it.</p><p>");
     n = wp_row(n, "Sort", WS_N, WS_, 6, w.s, &w, 's');
     if (seq(w.s, "toplist")) n = wp_row(n, "Range", WT_N, WT_, 7, w.t, &w, 't');
     n = gapp(n, "<b>Categories:</b> ");
@@ -383,6 +384,42 @@ static u32 png_encode(const u32 *px, i32 w, i32 h)
     return (u32)(p - pngbuf);
 }
 
+static int pv_open, pv_w, pv_h, pv_ow, pv_oh, pv_saved; static char pv_name[24], pv_path[40];
+
+static int pv_save(void)                                 /* в /Pictures/WH<ID>.PNG; 0 - успех */
+{
+    if (pv_saved) return 0;
+    static fat_t f;
+    if (!photos_volume(&f)) { set_toast("No disk to save to (install EndixOS first)."); return -1; }
+    u32 sz = png_encode(dlpix, pv_w, pv_h);
+    fat_mkdir(&f, "/Pictures");
+    scpy(pv_path, "/Pictures/", sizeof pv_path); u32 l = slen(pv_path);
+    scpy(pv_name, "WH", sizeof pv_name); u32 k = 2;
+    for (u32 i = 0; dl_id[i] && k < 10; i++) pv_name[k++] = (char)(dl_id[i] >= 'a' && dl_id[i] <= 'z' ? dl_id[i] - 32 : dl_id[i]);
+    pv_name[k] = 0;
+    scpy(pv_path + l, pv_name, sizeof pv_path - l); l = slen(pv_path);
+    scpy(pv_path + l, ".PNG", sizeof pv_path - l);
+    if (fat_write(&f, pv_path, pngbuf, sz) != 0) { set_toast("Could not write to the disk."); return -1; }
+    pv_saved = 1;
+    photos_scan(); settings_photos_changed();
+    return 0;
+}
+static int ieq(const char *a, const char *b) { while (*a && *b) { char x = *a >= 'a' && *a <= 'z' ? *a - 32 : *a, y = *b >= 'a' && *b <= 'z' ? *b - 32 : *b; if (x != y) return 0; a++; b++; } return *a == *b; }
+static void pv_apply(void)
+{
+    if (pv_save() != 0) return;
+    for (int i = photos_count() - 1; i >= 0; i--)
+        if (ieq(photos_name(i), pv_name)) { settings_set_wallpaper(WALL_PHOTO0 + i); pv_open = 0; set_toast("Wallpaper set."); wm_notify("Wallpapers", "New desktop wallpaper set."); return; }
+    pv_open = 0; set_toast("Saved to Pictures, but it is not in the wallpaper list.");
+}
+static void pv_store(void)
+{
+    if (pv_save() != 0) return;
+    pv_open = 0;
+    char m[64] = "Saved to Pictures: "; scpy(m + 19, pv_path + 10, sizeof m - 19);
+    set_toast(m); wm_notify("Wallpapers", m);
+}
+
 static void dl_finish(u32 len)
 {
     int w = 0, h = 0;
@@ -393,16 +430,65 @@ static void dl_finish(u32 len)
     if (tw < 1) tw = 1;
     if (th < 1) th = 1;
     if (!img_decode_ex(dlbuf, len, tw, th, dlpix, 4u * 1000 * 1000)) { set_toast("Could not decode this picture."); return; }
-    u32 sz = png_encode(dlpix, tw, th);
-    static fat_t f;
-    if (!photos_volume(&f)) { set_toast("No disk to save to (install EndixOS first)."); return; }
-    fat_mkdir(&f, "/Pictures");
-    char path[40] = "/Pictures/WH"; u32 l = 12;
-    for (u32 i = 0; dl_id[i] && l < 20; i++) path[l++] = (char)(dl_id[i] >= 'a' && dl_id[i] <= 'z' ? dl_id[i] - 32 : dl_id[i]);
-    path[l++] = '.'; path[l++] = 'P'; path[l++] = 'N'; path[l++] = 'G'; path[l] = 0;
-    if (fat_write(&f, path, pngbuf, sz) != 0) { set_toast("Could not write to the disk."); return; }
-    char m[96] = "Saved to Pictures: "; scpy(m + 19, path + 10, sizeof m - 19);
-    set_toast(m); wm_notify("Wallpapers", m);
+    pv_w = tw; pv_h = th; pv_ow = w; pv_oh = h; pv_saved = 0; pv_open = 1; toast[0] = 0; toast_a = 0;
+}
+
+/* окно просмотра: картинка и кнопки */
+static void pv_geom(i32 *cx, i32 *cy, i32 *cw, i32 *ch, i32 *pw, i32 *ph, i32 *by)
+{
+    i32 w = vw - 40 < 580 ? vw - 40 : 580;
+    i32 pwid = w - 32, phei = pwid * pv_h / pv_w, maxh = vh - 150;
+    if (maxh < 60) maxh = 60;
+    if (phei > maxh) { phei = maxh; pwid = phei * pv_w / pv_h; }
+    i32 h = 16 + phei + 14 + 22 + 14 + 38 + 16;
+    *cw = w; *ch = h; *cx = (vw - w) / 2; *cy = TB + (vh - h) / 2; *pw = pwid; *ph = phei; *by = *cy + h - 16 - 38;
+}
+static void pv_buttons(i32 cx, i32 cw, i32 by, i32 *x0, i32 *x1, i32 *x2, i32 *bw)
+{
+    i32 w1 = 190, w2 = 150, w3 = 90, gap = 10;
+    *bw = 0; *x2 = cx + cw - 16 - w3; *x1 = *x2 - gap - w2; *x0 = *x1 - gap - w1; (void)by;
+}
+static void pv_draw(i32 x, i32 py)
+{
+    const theme_t *t = theme();
+    i32 cx, cy, cw, ch, pw, ph, by; pv_geom(&cx, &cy, &cw, &ch, &pw, &ph, &by);
+    fb_blend_rect(x, py, vw, vh, 0, 120);
+    i32 oy = py - TB + cy;
+    fb_fill_round_rect(x + cx, oy, cw, ch, 16, t->body, 255);
+    u32 *fbp = fb_buffer(); i32 W = (i32)fb_width(), H = (i32)fb_height();
+    i32 ix = x + cx + (cw - pw) / 2, iy = oy + 16;
+    for (i32 r = 0; r < ph; r++) {
+        i32 yy = iy + r; if (yy < 0 || yy >= H) continue;
+        const u32 *src = dlpix + (u32)(r * pv_h / ph) * (u32)pv_w;
+        for (i32 c = 0; c < pw; c++) { i32 xx = ix + c; if (xx >= 0 && xx < W) fbp[(u32)yy * (u32)W + (u32)xx] = src[c * pv_w / pw]; }
+    }
+    char info[80] = "Wallhaven "; u32 l = slen(info);
+    for (u32 i = 0; dl_id[i] && l < 30; i++) info[l++] = dl_id[i];
+    info[l++] = ' '; info[l++] = '-'; info[l++] = ' ';
+    int vals[2] = { pv_ow, pv_oh };
+    for (int k = 0; k < 2; k++) { int v = vals[k], d[6], n = 0; do { d[n++] = v % 10; v /= 10; } while (v && n < 6); while (n) info[l++] = (char)('0' + d[--n]); if (!k) info[l++] = 'x'; }
+    info[l] = 0;
+    font_draw(x + cx + 16, iy + ph + 14, info, t->sub, FONT_REGULAR);
+    i32 b0, b1, b2, bw; pv_buttons(x + cx, cw, 0, &b0, &b1, &b2, &bw);
+    i32 byy = oy + ch - 16 - 38;
+    fb_fill_round_rect(b0, byy, 190, 38, 10, theme_accent(), 255);
+    font_draw(b0 + (190 - font_width("Set as Wallpaper", FONT_BOLD)) / 2, byy + 10, "Set as Wallpaper", RGB(255, 255, 255), FONT_BOLD);
+    fb_fill_round_rect(b1, byy, 150, 38, 10, t->card, 255);
+    font_draw(b1 + (150 - font_width("Save to Pictures", FONT_REGULAR)) / 2, byy + 10, "Save to Pictures", t->text, FONT_REGULAR);
+    fb_fill_round_rect(b2, byy, 90, 38, 10, t->card, 255);
+    font_draw(b2 + (90 - font_width("Cancel", FONT_REGULAR)) / 2, byy + 10, "Cancel", t->text, FONT_REGULAR);
+}
+static int pv_click(i32 rx, i32 ry)
+{
+    i32 cx, cy, cw, ch, pw, ph, by; pv_geom(&cx, &cy, &cw, &ch, &pw, &ph, &by);
+    i32 b0, b1, b2, bw; pv_buttons(cx, cw, 0, &b0, &b1, &b2, &bw);
+    if (ry >= by && ry < by + 38) {
+        if (rx >= b0 && rx < b0 + 190) { pv_apply(); return 1; }
+        if (rx >= b1 && rx < b1 + 150) { pv_store(); return 1; }
+        if (rx >= b2 && rx < b2 + 90) { pv_open = 0; return 1; }
+    }
+    if (rx < cx || rx >= cx + cw || ry < cy || ry >= cy + ch) pv_open = 0;
+    return 1;
 }
 
 static void start_dl(const char *u)
@@ -860,6 +946,7 @@ void browser_draw(i32 x, i32 y, int focused)
         font_clear_clip();
     }
 
+    if (pv_open) pv_draw(x, py);
     if (toast_a > 0 && toast[0]) {                                  /* плашка: скачивание и результат */
         i32 w = font_width(toast, FONT_BOLD) + 32; if (w > vw - 20) w = vw - 20;
         i32 sx = x + (vw - w) / 2, sy = pb - 52;
@@ -966,6 +1053,7 @@ int browser_click(i32 rx, i32 ry, u32 ticks)
         if (rx >= 114 && ry >= 8 && ry < 38) { if (!editing) begin_edit(); else sel_all = 0; return 1; }
         return 0;
     }
+    if (pv_open) return pv_click(rx, ry);
     int was = editing;
     editing = 0;
     if (in_scrollbar(rx, ry)) {
@@ -1030,6 +1118,7 @@ int browser_mouse(i32 rx, i32 ry, int btn, int over)
 
 int browser_key(i32 c, i32 ctrl)
 {
+    if (pv_open) { if (c == 27) pv_open = 0; else if (c == '\n') pv_apply(); return 1; }
     if (editing) {
         if (c == '\n') { editing = 0; char t[URLMAX + 6]; scpy(t, ed, sizeof t); navigate(t); return 1; }
         if (c == 27) { editing = 0; return 1; }
@@ -1076,6 +1165,7 @@ int browser_key(i32 c, i32 ctrl)
 
 int browser_wheel(i32 d)
 {
+    if (pv_open) return 0;
     scroll_to(sc_t - d * 54);
     return 1;
 }

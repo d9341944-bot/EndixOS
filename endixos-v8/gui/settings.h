@@ -7,6 +7,7 @@
 /* Все координаты - от левого верхнего угла области содержимого окна (под заголовком). */
 
 void settings_init(const sysinfo_t *info);          /* рисует стартовые обои и превью */
+void settings_photos_changed(void);                /* список фотографий обновился: миниатюры перечитать */
 void settings_set_wallpaper(int id);                /* меняет обои на экране */
 int  settings_wallpaper(void);
 
@@ -29,6 +30,6 @@ void settings_show_page(int p);     /* 0 Wallpaper, 1 Appearance, 2 Liquid Glass
 
 
 #define ENDIX_VERSION "8.3"
-#define ENDIX_BUILD 56
+#define ENDIX_BUILD 57
 
 #endif

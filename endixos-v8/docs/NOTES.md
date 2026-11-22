@@ -425,3 +425,6 @@ Ctrl+3 (anywhere) or terminal `screenshot` copies the screen to the system clipb
 
 ## Build 56: full Wallhaven-style catalog
 `endix://wallpapers` now has 24 thumbnails per page (MAXIMG/idec raised to 32), total count and "page N of M", numbered pagination (1 .. N-3..N+3 .. last, Previous/Next), and filters kept in the URL (s sort: toplist/date_added/random/views/favorites/relevance, t top range 1d..1y, c categories bitmask general/anime/people, r size preset incl. "Any" via atleast=1024x600, a ratio 16x9/16x10/4x3/21x9, q search, p page) plus a row of 24 tag searches. Fixed a bug where every second result was skipped. Still unverified against the real API/network.
+
+## Build 57: wallpapers preview, save, set
+Click a Wallpapers thumbnail: the full file is downloaded and a preview card opens (decoded picture, "Wallhaven ID - WxH", buttons Set as Wallpaper / Save to Pictures / Cancel; Enter = set, Esc = cancel). Nothing is written until a button is pressed. Set = save `/Pictures/WH<ID>.PNG`, rescan photos, select it as desktop wallpaper (prefs keep it). PHOTO_MAX is now 16 (Settings > Photos grid); when more files exist the OLDEST drop out of the list, so photo indices can shift. Host-tested with mocks; disk write and wallpaper apply not run on hardware.

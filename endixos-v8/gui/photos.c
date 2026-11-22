@@ -35,7 +35,8 @@ static int ext_ok(const char *a)                         /* .jpg .jpeg .png (б�
 static int on_entry(void *ctx, const char *name, const char *alias, u32 size, int is_dir)
 {
     (void)ctx;
-    if (is_dir || nph >= PHOTO_MAX || size == 0 || size > PHOTO_FILE_MAX || !ext_ok(name)) return nph >= PHOTO_MAX;
+    if (is_dir || size == 0 || size > PHOTO_FILE_MAX || !ext_ok(name)) return 0;
+    if (nph >= PHOTO_MAX) { for (int i = 1; i < PHOTO_MAX; i++) ph[i - 1] = ph[i]; nph = PHOTO_MAX - 1; }      /* список полон: самые старые уходят */
     photo_t *p = &ph[nph];
     int n = 0, last_dot = -1;
     for (; name[n] && n < 39; n++) if (name[n] == '.') last_dot = n;

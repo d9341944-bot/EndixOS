@@ -1,5 +1,5 @@
-build=56
+build=57
 version=8.3
-size=3902744
-notes=Wallpapers: full catalog with search, filters, 24 per page and page numbers|Browix start page|Screenshots to clipboard, update usb
-sha256=5184e92f1f8757d1265d10597a5cfbceff83a02bc6bc2cdcf9bb9f103e88a80d
+size=3906968
+notes=Wallpapers: preview, Set as Wallpaper and Save to Pictures buttons|Full Wallhaven-style catalog|Browix start page, screenshots, update usb
+sha256=97f1ba3ff24673f607004e58026e81b7012ce026bc6d38065a7953e8804d59c1
