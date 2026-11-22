@@ -24,6 +24,7 @@ int  update_can_install(void);           /* 1 - запущены с устано
 int  update_auto(void);
 void update_set_auto(int on);
 void update_restart(void);
+int  update_from_usb(void);              /* поставить endixos.elf с флешки (без сети); 0 - файл найден */
 
 /* для тестов */
 int  update_parse(const char *text);     /* разбор манифеста: 0 - успех */

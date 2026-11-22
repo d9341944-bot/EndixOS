@@ -4,6 +4,7 @@
 #include "../kernel/net.h"
 #include "../kernel/crypto.h"
 #include "../kernel/blk.h"
+#include "../drivers/usb.h"
 
 #ifndef UPDATE_BASE
 #define UPDATE_BASE "https://raw.githubusercontent.com/d9341944-bot/EndixOS/main/endixos-v8/update/"
@@ -90,6 +91,31 @@ void update_install(void)
     pct = 0;
     if (net_fetch(UPDATE_BASE "endixos.elf", kbuf, UP_MAX) != 0) { fetch_error(); return; }
     st = UP_DOWNLOADING; t_start = t_last = 0; t_progress_len = 0;
+}
+
+/* Обновление с флешки без сети: ищет endixos.elf (в корне, /boot, /update) на USB-накопителях FAT32. 0 - найден, установка пойдёт в update_tick. */
+int update_from_usb(void)
+{
+    static const char *const paths[] = { "/endixos.elf", "/ENDIXOS.ELF", "/boot/endixos.elf", "/update/endixos.elf" };
+    static fat_t uf;
+    if (st == UP_DOWNLOADING || st == UP_INSTALLING || st == UP_CHECKING) { say("Busy."); return -1; }
+    if (!update_can_install()) { fail("Updates can be installed only on an installed EndixOS."); return -1; }
+    if (usb_drive_count() == 0) usb_scan();
+    for (int i = 0; i < usb_drive_count(); i++) {
+        blk_t *b = usb_blk(i); u8 type; u32 start, sz;
+        if (mbr_get_part(b, 0, &type, &start, &sz) != 0) start = 0;
+        if (fat_mount(b, start, &uf) != 0) continue;
+        for (unsigned k = 0; k < sizeof paths / sizeof *paths; k++) {
+            int n = fat_read(&uf, paths[k], kbuf, UP_MAX);
+            if (n < 100000 || kbuf[0] != 0x7F || kbuf[1] != 'E' || kbuf[2] != 'L' || kbuf[3] != 'F') continue;
+            size = (u32)n; sha256(kbuf, size, want);
+            ver[0] = 'U'; ver[1] = 'S'; ver[2] = 'B'; ver[3] = 0;
+            pct = 90; step = 0; msg[0] = 0; st = UP_INSTALLING;
+            return 0;
+        }
+    }
+    fail("No endixos.elf found on a USB stick (FAT32, in / or /boot).");
+    return -1;
 }
 
 /* в grub.cfg добавляется пункт со старой версией: копия первого пункта с другим ядром */

@@ -1,5 +1,6 @@
 /* Оконный менеджер EndixOS: menu bar, окна, Dock, курсор, встроенные приложения. */
 #include "wm.h"
+#include "update.h"
 #include "../drivers/pci.h"
 #include "../drivers/ahci.h"
 #include "../drivers/usb.h"

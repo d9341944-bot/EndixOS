@@ -1,5 +1,5 @@
-build=52
+build=53
 version=8.3
-size=3872656
-notes=New widgets: Battery, Music, Notes, Wi-Fi, World Clock|Widget sizes Small/Medium/Large|macOS-style widget gallery editor
-sha256=e55dd50cfa862efece5d7f0d9e6a949eb483f8f31ef145ae2d30694bd8bb4a1d
+size=3872728
+notes=update usb command: install from a USB stick without network|New widgets and widget editor
+sha256=5eea09b3d7029e7275c385a0a48cc6086df3ffa4b611f390e6e737925f402cbb

@@ -410,3 +410,6 @@ Put JPEG/PNG files into the folder `Pictures` in the root of the SATA disk's FAT
 - Сохранения (`*.dsg`): при `fclose` файла на запись libc зовёт `doom_file_written`, `gui/doomapp.c` пишет его на тот же FAT32-том, где лежит WAD (`/Games/DOOMSAV0.DSG`). При запуске все `*.dsg` из этой папки читаются обратно в RAM-файлы. Конфиг и временные файлы (`doom.mid`) на диск не пишутся. Если том только для чтения или флешка вынута - запись молча пропускается.
 - Мышь: `ps2_mouse_hook(dx, dy, btn)` в `drivers/ps2.c` (мышь и тачпад Synaptics), включается по **F12** в окне Doom (по умолчанию выключена, чтобы можно было закрыть окно и пользоваться Dock). Кадр суммирует сдвиги в один `ev_mouse` (x2). Кнопка 1 - огонь.
 - Тесты: `tools/tests/doomwm.c` (подхват и запись сохранений, F12), `doomrun.sh` (движок со сдвигами мыши). НЕ проверено на железе. Полноэкранный режим не сделан.
+
+## Build 53: `update usb`
+Terminal `update usb` installs endixos.elf from a FAT32 USB stick (/, /boot or /update; ELF magic + size check, SHA computed locally, same backup to previous.elf + verify/rollback path as network update), no network needed. Then `reboot`. Only host-compiled, not run on hardware.

@@ -811,7 +811,7 @@ static const cmd_info_t cmd_table[] = {
     { "free", "free" }, { "df", "df" }, { "ps", "ps" }, { "top", "top" }, { "kill", "kill name|pid" },
     { "whoami", "whoami" }, { "hostname", "hostname" }, { "sw_vers", "sw_vers" }, { "history", "history" },
     { "open", "open files|terminal|settings|snake|about|launchpad|mission" }, { "snake", "snake" },
-    { "perf", "perf  (frame time, quality level, video writes: real-hardware speed check)" }, { "usb", "usb [ls [path]]  (USB 2.0 flash drives: scan; ls lists a FAT32 stick)" }, { "disks", "disks  (SATA disks and their partitions, read only)" }, { "install", "install  (graphical installer: erases a disk!)" }, { "lock", "lock  (show the login screen)" }, { "lspci", "lspci  (list PCI devices: vendor:device class)" }, { "nicinfo", "nicinfo  (JMicron Ethernet diagnostics)" }, { "wifi", "wifi [on|fw|phy|stat|fwinstall]  (Realtek RTL8188CE Wi-Fi: detect, power on, firmware, radio tables)" }, { "ec", "ec [snap|diff]  (256 EC bytes; snap remembers them, diff shows what changed since)" }, { "battery", "battery [set PCT [AC MASK]|off]  (EC offsets in hex, e.g. battery set 7A 7B 01)" }, { "touchpad", "touchpad  (touchpad status and counters)" }, { "audio", "audio [test]  (HD Audio status; test plays the startup sound)" }, { "ifconfig", "ifconfig" }, { "ping", "ping [-c N] host  (Ctrl+C stops)" }, { "nslookup", "nslookup host" }, { "curl", "curl [-i] http://host/path  (Ctrl+C stops; no HTTPS yet)" },
+    { "perf", "perf  (frame time, quality level, video writes: real-hardware speed check)" }, { "update", "update [usb]  (usb: install endixos.elf from a USB stick without network)" }, { "usb", "usb [ls [path]]  (USB 2.0 flash drives: scan; ls lists a FAT32 stick)" }, { "disks", "disks  (SATA disks and their partitions, read only)" }, { "install", "install  (graphical installer: erases a disk!)" }, { "lock", "lock  (show the login screen)" }, { "lspci", "lspci  (list PCI devices: vendor:device class)" }, { "nicinfo", "nicinfo  (JMicron Ethernet diagnostics)" }, { "wifi", "wifi [on|fw|phy|stat|fwinstall]  (Realtek RTL8188CE Wi-Fi: detect, power on, firmware, radio tables)" }, { "ec", "ec [snap|diff]  (256 EC bytes; snap remembers them, diff shows what changed since)" }, { "battery", "battery [set PCT [AC MASK]|off]  (EC offsets in hex, e.g. battery set 7A 7B 01)" }, { "touchpad", "touchpad  (touchpad status and counters)" }, { "audio", "audio [test]  (HD Audio status; test plays the startup sound)" }, { "ifconfig", "ifconfig" }, { "ping", "ping [-c N] host  (Ctrl+C stops)" }, { "nslookup", "nslookup host" }, { "curl", "curl [-i] http://host/path  (Ctrl+C stops; no HTTPS yet)" },
     { "files", "files" }, { "wallpaper", "wallpaper N" }, { "theme", "theme light|dark" },
     { "accent", "accent purple|blue|green|..." }, { "dock", "dock hide off|auto|smart | zoom N | magnify on|off" },
     { "notify", "notify text" }, { "spotlight", "spotlight" }, { "cmatrix", "cmatrix (q to quit)" }, { "cowsay", "cowsay text" }, { "fortune", "fortune" },
@@ -931,6 +931,14 @@ static int term_ext_cmd(const char *cmd, char *arg)
     else if (s_eq(cmd, "disks")) cmd_disks();
     else if (s_eq(cmd, "perf")) cmd_perf();
     else if (s_eq(cmd, "usb")) cmd_usb(arg);
+    else if (s_eq(cmd, "update")) {
+        if (s_eq(arg, "usb")) { term_puts(update_from_usb() == 0 ? "Installing endixos.elf from USB... run 'update' to see progress, then 'reboot'.\n" : update_message()); if (update_state() == UP_ERROR) term_putc('\n'); }
+        else {
+            int s = update_state();
+            term_puts(s == UP_READY ? "Update installed. Type 'reboot'.\n" : s == UP_INSTALLING ? "Installing...\n" : s == UP_ERROR ? update_message() : "usage: update usb  (install endixos.elf from a USB stick, no network needed)\n");
+            if (s == UP_ERROR) term_putc('\n');
+        }
+    }
     else if (s_eq(cmd, "install")) { installer_open(); scene_dirty = 1; }
     else if (s_eq(cmd, "ping")) cmd_ping(arg);
     else if (s_eq(cmd, "nslookup")) cmd_nslookup(arg);
