@@ -414,5 +414,5 @@ Put JPEG/PNG files into the folder `Pictures` in the root of the SATA disk's FAT
 ## Build 53: `update usb`
 Terminal `update usb` installs endixos.elf from a FAT32 USB stick (/, /boot or /update; ELF magic + size check, SHA computed locally, same backup to previous.elf + verify/rollback path as network update), no network needed. Then `reboot`. Only host-compiled, not run on hardware.
 
-## Build 54: screenshots
-Ctrl+3 (anywhere) or terminal `screenshot` saves the screen as PNG to /Pictures/SHOTnnnn.PNG on the disk (gui/screenshot.c; uncompressed deflate blocks, ~2 MB at 1024x600, no deflate code needed) and shows a notification; it appears in Photos. Encoder checked on host with PIL; disk write path and Photos decoding of stored-deflate PNGs not run on hardware.
+## Build 54: screenshots to clipboard
+Ctrl+3 (anywhere) or terminal `screenshot` copies the screen to the system clipboard (gui/clipboard.c, RAM only, nothing is written to disk). The image is downscaled to max 440x280. Ctrl+V in Notes inserts it as a picture: text holds `\x01`+slot digit followed by blank lines that reserve the space (6 slots in RAM; markers are stripped on load, so pictures live only until reboot; Notes widget skips them). Backspace/Delete remove a picture as a unit. Not yet: copy text, paste elsewhere. Host-tested with screenshots (tools/tests style harness); not run on hardware.

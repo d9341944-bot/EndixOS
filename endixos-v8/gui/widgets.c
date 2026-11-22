@@ -296,6 +296,7 @@ static void wrap_text(i32 x, i32 y, i32 wd, int maxl, const char *s, u32 col)
     char ln[100]; int n = 0, l = 0; i32 lw = 0;
     while (*s && l < maxl) {
         if (*s == '\n') { ln[n] = 0; font_draw(x, y + l * 17, ln, col, FONT_REGULAR); l++; n = 0; lw = 0; s++; continue; }
+        if (*s == 1) { s += s[1] ? 2 : 1; continue; }
         int c = utf8_clen(s); if (c < 1) c = 1;
         char ch[5]; for (int k = 0; k < c && k < 4; k++) ch[k] = s[k]; ch[c < 4 ? c : 4] = 0;
         i32 cwid = font_width(ch, FONT_REGULAR);

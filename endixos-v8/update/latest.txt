@@ -1,5 +1,5 @@
 build=54
 version=8.3
-size=3877000
-notes=Screenshots: Ctrl+3 or 'screenshot' saves PNG to Pictures|update usb command|New widgets and widget editor
-sha256=5bfc2fbf956b736af4bcaff7effe0933dfd86afc14ce13003f6761d378e847d0
+size=3877168
+notes=Screenshots: Ctrl+3 copies the screen, Ctrl+V pastes it into Notes|update usb command|New widgets and widget editor
+sha256=3c970277794ced056dd2ad9c62814898619e3e411540e6a65b493afbfa020d03

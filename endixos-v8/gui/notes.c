@@ -4,6 +4,7 @@
 #include "font.h"
 #include "theme.h"
 #include "resolution.h"
+#include "clipboard.h"
 #include "../kernel/event.h"
 #include "../kernel/fs.h"
 
@@ -31,6 +32,10 @@ static ed_t NT = { .view_w = 520, .view_h = 400, .node = -1 }, TE = { .view_w = 
 static ed_t *E = &NT;
 static u32 now_t;
 static i32 adv[200];
+
+/* Картинки в заметках: в тексте стоит \x01 и цифра слота, под ними резервируются пустые строки. Хранятся только в RAM. */
+#define NIMG 6
+static u32 nimg[NIMG][CLIP_MAXW * CLIP_MAXH]; static int nimg_w[NIMG], nimg_h[NIMG], nimg_next;
 const char *notes_preview(void) { return NT.loaded ? NT.txt : ""; }
 #define txt (E->txt)
 #define len (E->len)
@@ -49,6 +54,7 @@ const char *notes_preview(void) { return NT.loaded ? NT.txt : ""; }
 
 static i32 cw(const char *p)                 /* ширина символа (ASCII или кириллица UTF-8) */
 {
+    if (p[0] == 1 || (p > txt && p[-1] == 1)) return 0;            /* метка картинки не занимает места */
     int cp = utf8_cp(p), u;
     if (cp < 128) u = cp;
     else if (cp >= 0x410 && cp <= 0x44F) u = 128 + (cp - 0x410);
@@ -172,6 +178,9 @@ void notes_init(void)
             len = (int)sz;
         }
     }
+    {   int o = 0;                                        /* метки картинок из сохранённого текста убираем: картинки живут только в RAM */
+        for (int i = 0; i < len; i++) { if (txt[i] == 1) { i++; continue; } txt[o++] = txt[i]; }
+        len = o; }
     txt[len] = 0; cur = len; loaded = 1; layout(); ensure_visible();
 }
 
@@ -195,16 +204,31 @@ static void erase(int pos)                  /* удаляет символ, на
     touch();
 }
 
+static void paste_image(void)
+{
+    if (!clip_has_image() || E->te) return;
+    int w = clip_image_w(), h = clip_image_h(), s = nimg_next++ % NIMG;
+    int rows = (h + LH - 1) / LH;
+    if (len + 2 + rows > MAXT) return;
+    const u32 *src = clip_image();
+    for (int i = 0; i < w * h; i++) nimg[s][i] = src[i];
+    nimg_w[s] = w; nimg_h[s] = h;
+    if (cur > 0 && txt[cur - 1] != '\n') insert('\n');      /* метка всегда в начале строки */
+    insert(1); insert('0' + s);
+    for (int i = 0; i < rows; i++) insert('\n');
+}
+
 static int ed_key(i32 k, int ctrl)
 {
     if (ctrl) {
+        if (k == 'v' || k == 'V' || k == 22) { paste_image(); ensure_visible(); return 1; }
         if (E->te && (k == 's' || k == 'S' || k == 19)) { save(); return 1; }
         return 0;
     }
     int l = line_of(cur);
     if (k == '\n' || k == '\r') insert('\n');
-    else if (k == '\b') erase(utf8_prev(txt, cur));
-    else if (k == KEY_DELETE) erase(cur);
+    else if (k == '\b') { if (cur >= 2 && txt[cur - 2] == 1) { erase(cur - 2); erase(cur - 2); } else erase(utf8_prev(txt, cur)); }
+    else if (k == KEY_DELETE) { if (cur < len && txt[cur] == 1) { erase(cur); erase(cur); } else erase(cur); }
     else if (k == KEY_LEFT) { if (cur > 0) cur = utf8_prev(txt, cur); blink = 1; blink_t = now_t; }
     else if (k == KEY_RIGHT) { if (cur < len) cur += utf8_clen(&txt[cur]); blink = 1; blink_t = now_t; }
     else if (k == KEY_UP) { if (l > 0) cur = pos_at(l - 1, x_of(l, cur)); else cur = 0; blink = 1; }
@@ -214,6 +238,7 @@ static int ed_key(i32 k, int ctrl)
     else if (k == '\t') { insert(' '); insert(' '); }
     else if (is_text_cp(k)) insert(k);
     else return 0;
+    if (cur > 0 && cur < len && txt[cur - 1] == 1) cur += (k == KEY_LEFT || k == KEY_UP) ? -1 : 1;     /* курсор не встаёт внутрь метки картинки */
     ensure_visible();
     return 1;
 }
@@ -256,6 +281,18 @@ static void ed_draw(i32 x, i32 y, i32 w, i32 h)
     font_draw(te ? x + PADX : x + w - PADX - font_width(st, FONT_REGULAR), y + 10, st, te ? t->sub : (dark ? RGB(200, 180, 110) : RGB(120, 100, 30)), FONT_REGULAR);
     int rows = (h - HEAD - 16) / LH;
     if (len == 0) font_draw(x + PADX, y + HEAD + 8, "Type something...", t->sub, FONT_REGULAR);
+    for (int l = scroll > 20 ? scroll - 20 : 0; l < nl && l < scroll + rows; l++) {         /* картинки */
+        int a = lstart[l];
+        if (a >= len || txt[a] != 1 || a + 1 >= len) continue;
+        int s = txt[a + 1] - '0';
+        i32 iy = y + HEAD + 8 + (l - scroll) * LH, ix = x + PADX;
+        if (s < 0 || s >= NIMG || !nimg_w[s]) { if (iy > y + HEAD && iy < y + h - LH) font_draw(ix, iy, "(image is not saved)", t->sub, FONT_REGULAR); continue; }
+        for (int py = 0; py < nimg_h[s]; py++) {
+            i32 sy = iy + py;
+            if (sy < y + HEAD + 2 || sy >= y + h - 2) continue;
+            for (int px2 = 0; px2 < nimg_w[s] && ix + px2 < x + w - 2; px2++) fb_fill_rect(ix + px2, sy, 1, 1, nimg[s][py * nimg_w[s] + px2]);
+        }
+    }
     for (int r = 0; r < rows; r++) {
         int l = scroll + r;
         if (l >= nl) break;
@@ -263,6 +300,7 @@ static void ed_draw(i32 x, i32 y, i32 w, i32 h)
         int e = lim(l);
         for (int i = lstart[l]; i < e; i += utf8_clen(&txt[i])) {
             if (txt[i] == '\n') break;
+            if (txt[i] == 1 || (i > 0 && txt[i - 1] == 1)) continue;
             char c[3] = { txt[i], 0, 0 };
             if (utf8_clen(&txt[i]) == 2) c[1] = txt[i + 1];
             else if ((unsigned char)c[0] < 32 || (unsigned char)c[0] > 126) c[0] = '?';
